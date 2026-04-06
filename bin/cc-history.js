@@ -17,7 +17,7 @@ function openInBrowser(url) {
   exec(`${cmd} "${url}"`);
 }
 
-const PORT = parseInt(process.env.CC_HISTORY_PORT) || 0; // 0 = auto-assign
+const PORT = parseInt(process.env.CC_HISTORY_PORT) || 3333;
 
 const server = http.createServer(async (req, res) => {
   try {
