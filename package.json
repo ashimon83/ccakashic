@@ -1,14 +1,15 @@
 {
   "name": "cc-history",
   "version": "0.1.0",
-  "description": "Browse Claude Code session logs as beautiful HTML",
+  "description": "Browse Claude Code session logs (~/.claude/projects/) as beautiful HTML in your browser",
   "bin": {
     "cc-history": "./bin/cc-history.js"
   },
   "files": [
     "bin",
     "lib",
-    "vendor"
+    "vendor",
+    "README.md"
   ],
   "engines": {
     "node": ">=18"
@@ -17,5 +18,24 @@
     "start": "node bin/cc-history.js"
   },
   "dependencies": {},
-  "license": "MIT"
+  "keywords": [
+    "claude",
+    "claude-code",
+    "session",
+    "history",
+    "viewer",
+    "log",
+    "jsonl",
+    "html"
+  ],
+  "author": "ashimon83",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ashimon83/cc-history.git"
+  },
+  "homepage": "https://github.com/ashimon83/cc-history#readme",
+  "bugs": {
+    "url": "https://github.com/ashimon83/cc-history/issues"
+  }
 }
