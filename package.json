@@ -1,9 +1,9 @@
 {
-  "name": "cc-history",
+  "name": "ccsessions",
   "version": "0.1.0",
   "description": "Browse Claude Code session logs (~/.claude/projects/) as beautiful HTML in your browser",
   "bin": {
-    "cc-history": "./bin/cc-history.js"
+    "ccsessions": "./bin/cc-history.js"
   },
   "files": [
     "bin",
@@ -32,10 +32,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ashimon83/cc-history.git"
+    "url": "git+https://github.com/ashimon83/ccsessions.git"
   },
-  "homepage": "https://github.com/ashimon83/cc-history#readme",
+  "homepage": "https://github.com/ashimon83/ccsessions#readme",
   "bugs": {
-    "url": "https://github.com/ashimon83/cc-history/issues"
+    "url": "https://github.com/ashimon83/ccsessions/issues"
   }
 }
