@@ -23,13 +23,16 @@ A local HTTP server starts and your browser opens automatically.
 ## Features
 
 - **Fully browser-based** — Project list → Session list → Conversation detail
-- **Chat-style layout** — User / assistant messages in bubbles
-- **Collapsible tool calls** — Bash, Read, Edit, and other tool invocations are collapsed into `<details>` blocks
+- **Chat-style layout** — User / assistant messages in chat bubbles
+- **Collapsible tool calls** — Bash, Read, Edit, and other tool invocations collapsed by default
 - **Diff view** — File edits shown with red/green line highlights
 - **Date navigation** — Side nav and sticky headers to jump between dates
-- **Token stats** — Per-session input/output tokens, cache hit rate, and duration
+- **Cost estimation** — Per-turn and per-message USD cost based on Claude Opus 4 pricing (input / output / cache read / cache write breakdown)
+- **Elapsed time** — Per-turn duration and per-tool execution time derived from timestamps
+- **Local command display** — `!` shell commands rendered with prompt and output
 - **Inline subagent conversations** — Subagent dialogues nested inside the Agent tool_use that spawned them
-- **Permalinks** — Click any message timestamp to get a shareable URL
+- **Permalinks** — Click any message timestamp to get a shareable URL (`#t20260416103045`)
+- **Session-level stats** — Estimated cost, turns, token breakdown, cache hit rate, and duration in the header
 - **Dark mode** — Follows `prefers-color-scheme` automatically
 - **Filter search** — Incremental filtering on list pages
 - **Keyboard navigation** — `j` / `k` to move between messages
