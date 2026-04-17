@@ -2,6 +2,10 @@
 
 An Akashic Record of your Claude Code sessions — browse Claude Code session logs (`~/.claude/projects/`) as beautiful HTML in your browser.
 
+![Session detail with stats, cost badges, and chat layout](docs/screenshot1.png)
+
+![Collapsible tool calls, code blocks, and per-message cost](docs/screenshot2.png)
+
 ## Usage
 
 ### npx
