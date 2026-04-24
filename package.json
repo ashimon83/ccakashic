@@ -1,6 +1,6 @@
 {
   "name": "ccakashic",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Browse Claude Code session logs (~/.claude/projects/) as beautiful HTML in your browser — an Akashic Record of your Claude Code sessions",
   "bin": {
     "ccakashic": "bin/ccakashic.js"
