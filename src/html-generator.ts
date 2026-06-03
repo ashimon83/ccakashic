@@ -332,7 +332,7 @@ export interface GenerateOptions {
 
 export function generate(parsed: ParsedSession, options: GenerateOptions = {}): string {
   const { projectName, session, backUrl } = options;
-  const title = session?.slug || session?.id || 'Session';
+  const title = session?.customTitle || session?.aiTitle || session?.slug || session?.id || 'Session';
   const date = session?.timestamp
     ? new Date(session.timestamp).toLocaleDateString('en-CA')
     : '';

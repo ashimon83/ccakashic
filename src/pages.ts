@@ -98,6 +98,12 @@ function indexCSS(): string {
   font-size: 0.95rem;
   margin-bottom: 4px;
 }
+.list-item-name {
+  font-size: 1.02rem;
+}
+.list-item-name.is-named {
+  color: var(--link);
+}
 .list-item-meta {
   font-size: 0.8rem;
   color: var(--text-muted);
@@ -121,6 +127,16 @@ function indexCSS(): string {
   font-weight: 600;
   background: var(--tool-bg);
   border: 1px solid var(--border);
+}
+.badge-named {
+  background: var(--link);
+  border-color: var(--link);
+  color: #fff;
+}
+.badge-ai {
+  background: transparent;
+  border-color: var(--link);
+  color: var(--link);
 }
 .search-box {
   width: 100%;
@@ -312,9 +328,22 @@ export function generateSessionList(project: Project, sessions: SessionPreview[]
       const outTok = s.outputTokens ? `<span>out: ${formatTokens(s.outputTokens)}</span>` : '';
       const preview = s.preview ? `<div class="list-item-preview">${escapeHtml(s.preview)}</div>` : '';
 
+      // Prefer a human/AI-given name as the headline; renamed sessions get a
+      // distinct treatment so they're easy to spot in the list.
+      const displayName = s.customTitle || s.aiTitle;
+      const nameBadge = s.customTitle
+        ? '<span class="badge badge-named">named</span>'
+        : s.aiTitle
+        ? '<span class="badge badge-ai">AI</span>'
+        : '';
+      const titleRow = displayName
+        ? `<div class="list-item-title"><span class="list-item-name${s.customTitle ? ' is-named' : ''}">${escapeHtml(displayName)}</span> ${nameBadge} ${slug} ${sub}</div>
+  <div class="list-item-meta"><span>${lastModTime}</span><span>started: ${startedTime}</span>${model}${branch}${tokens}${outTok}</div>`
+        : `<div class="list-item-title">${lastModTime} ${slug} ${sub}</div>
+  <div class="list-item-meta"><span>started: ${startedTime}</span>${model}${branch}${tokens}${outTok}</div>`;
+
       return `<a class="list-item" href="${href}">
-  <div class="list-item-title">${lastModTime} ${slug} ${sub}</div>
-  <div class="list-item-meta"><span>started: ${startedTime}</span>${model}${branch}${tokens}${outTok}</div>
+  ${titleRow}
   ${preview}
 </a>`;
     }).join('\n');

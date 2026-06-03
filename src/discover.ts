@@ -21,6 +21,8 @@ export interface SessionPreview {
   preview: string;
   gitBranch: string | null;
   slug: string | null;
+  customTitle: string | null;
+  aiTitle: string | null;
   model: string | null;
   hasSubagents: boolean;
   totalTokens: number;
@@ -95,6 +97,8 @@ async function getSessionPreview(filePath: string): Promise<SessionPreview> {
       preview: '',
       gitBranch: null,
       slug: null,
+      customTitle: null,
+      aiTitle: null,
       model: null,
       hasSubagents: false,
       totalTokens: 0,
@@ -125,6 +129,15 @@ async function getSessionPreview(filePath: string): Promise<SessionPreview> {
         }
         if (!result.slug && obj.slug) {
           result.slug = obj.slug;
+        }
+
+        // Title records can appear anywhere and be updated multiple times
+        // (e.g. renaming repeatedly), so keep the last non-empty value.
+        if (obj.type === 'custom-title' && obj.customTitle) {
+          result.customTitle = obj.customTitle;
+        }
+        if (obj.type === 'ai-title' && obj.aiTitle) {
+          result.aiTitle = obj.aiTitle;
         }
 
         if (!result.model && obj.type === 'assistant' && obj.message?.model) {
