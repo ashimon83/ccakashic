@@ -6,7 +6,7 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { exec } from 'child_process';
 import { listProjects, listSessions, listRecentSessions, findSessionForCwd, readCwdFromSession } from '../discover';
-import { parseSession, parseSessionCached, type SessionActivity } from '../parser';
+import { parseSession, parseSessionCached } from '../parser';
 import { generate } from '../html-generator';
 import { generateIndex, generateSessionList } from '../pages';
 import { generateDashboard, renderPaneBody, paneStatus, timeAgo, PANE_COUNTS, DEFAULT_PANE_COUNT, type WaitState } from '../dashboard';
@@ -99,16 +99,12 @@ async function buildCmuxWaitMap(): Promise<Map<string, WaitReason>> {
   return result;
 }
 
-// Combine the cmux signal (authoritative reason: input vs permission) with the
-// jsonl tail heuristic (universal, works for sessions cmux can't map).
-function resolveWaiting(
-  sessionId: string,
-  activity: SessionActivity,
-  cmuxWait: Map<string, WaitReason>,
-): WaitState {
-  const reason = cmuxWait.get(sessionId);
-  if (reason) return reason;
-  return activity === 'waiting' ? 'input' : null;
+// Waiting is driven solely by cmux's unread notifications: cmux clears them the
+// moment you focus a workspace, so the dashboard badge self-clears when you open
+// the tab — mirroring cmux exactly. (A jsonl "assistant ended its turn" signal
+// was tried but flags nearly every finished session and never self-clears.)
+function resolveWaiting(sessionId: string, cmuxWait: Map<string, WaitReason>): WaitState {
+  return cmuxWait.get(sessionId) ?? null;
 }
 
 function readJsonBody(req: http.IncomingMessage): Promise<any> {
@@ -227,14 +223,11 @@ const server = http.createServer(async (req, res) => {
       const paneCount = PANE_COUNTS.includes(requested) ? requested : DEFAULT_PANE_COUNT;
       const recent = await listRecentSessions(paneCount);
       const cmuxWait = await buildCmuxWaitMap();
-      const panes = await Promise.all(recent.map(async (session) => {
-        const parsed = await parseSessionCached(session.path, session.lastModified);
-        return {
-          session,
-          bodyHtml: renderPaneBody(parsed),
-          waiting: resolveWaiting(session.id, parsed.activity, cmuxWait),
-        };
-      }));
+      const panes = await Promise.all(recent.map(async (session) => ({
+        session,
+        bodyHtml: renderPaneBody(await parseSessionCached(session.path, session.lastModified)),
+        waiting: resolveWaiting(session.id, cmuxWait),
+      })));
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(generateDashboard(panes, paneCount, await buildResumeContext()));
       return;
@@ -263,19 +256,17 @@ const server = http.createServer(async (req, res) => {
       const status = paneStatus(mtime);
       const ago = timeAgo(mtime);
       const cmuxWait = await buildCmuxWaitMap();
+      const waiting = resolveWaiting(sessionId, cmuxWait);
       res.writeHead(200, { 'Content-Type': 'application/json' });
       // mtimeMs is sub-millisecond (nanosecond FS resolution) so distinct
       // appends get distinct values; `<=` means "nothing newer since last poll".
-      // We still re-evaluate waiting state even when the body is unchanged,
-      // since a cmux permission prompt doesn't append to the jsonl.
+      // Waiting still re-evaluates here (cmux notifications change without the
+      // jsonl growing) so the badge clears on the next poll after you open a tab.
       if (mtime <= since) {
-        const parsedUnchanged = await parseSessionCached(sessionPath, mtime);
-        const waiting = resolveWaiting(sessionId, parsedUnchanged.activity, cmuxWait);
         res.end(JSON.stringify({ changed: false, status, ago, waiting }));
         return;
       }
       const parsed = await parseSessionCached(sessionPath, mtime);
-      const waiting = resolveWaiting(sessionId, parsed.activity, cmuxWait);
       res.end(JSON.stringify({ changed: true, mtime, status, ago, waiting, html: renderPaneBody(parsed) }));
       return;
     }
