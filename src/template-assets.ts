@@ -626,10 +626,15 @@ export function getAppJS(): string {
     return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
-  // Render markdown in all [data-markdown] elements
-  document.querySelectorAll('[data-markdown]').forEach(function(el) {
-    el.innerHTML = renderMarkdown(el.textContent);
-  });
+  // Render markdown in all [data-markdown] elements. Exposed globally so the
+  // dashboard can re-apply it to pane content replaced after a poll.
+  function applyMarkdown(root) {
+    root.querySelectorAll('[data-markdown]').forEach(function(el) {
+      el.innerHTML = renderMarkdown(el.textContent);
+    });
+  }
+  window.ccakashicApplyMarkdown = applyMarkdown;
+  applyMarkdown(document);
 
   // Scroll to bottom when hash is #session-bottom. We re-scroll here (after
   // markdown rendering) because the DOM height grows when markdown expands,

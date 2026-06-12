@@ -5,10 +5,11 @@ import * as os from 'os';
 import * as path from 'path';
 import * as crypto from 'crypto';
 import { exec } from 'child_process';
-import { listProjects, listSessions, findSessionForCwd, readCwdFromSession } from '../discover';
+import { listProjects, listSessions, listRecentSessions, findSessionForCwd, readCwdFromSession } from '../discover';
 import { parseSession } from '../parser';
 import { generate } from '../html-generator';
 import { generateIndex, generateSessionList } from '../pages';
+import { generateDashboard, renderPaneBody, paneStatus, timeAgo, PANE_COUNTS, DEFAULT_PANE_COUNT } from '../dashboard';
 import type { ResumeContext } from '../resume-ui';
 import {
   isCmuxAvailable,
@@ -32,6 +33,10 @@ function openInBrowser(url: string): void {
 }
 
 async function openUrl(url: string): Promise<void> {
+  if (NO_OPEN) {
+    console.log(`Not opening a browser (--no-open). URL: ${url}`);
+    return;
+  }
   if (!NO_CMUX && await isCmuxAvailable()) {
     try {
       await openInCmuxBrowser(url);
@@ -48,6 +53,7 @@ const PORT = parseInt(process.env.CCAKASHIC_PORT || '') || 3333;
 const MAX_PORT_TRIES = 20;
 const LOCK_FILE = path.join(os.tmpdir(), `ccakashic-${os.userInfo().username || 'user'}.json`);
 const NO_CMUX = process.argv.includes('--no-cmux') || !!process.env.CCAKASHIC_NO_CMUX;
+const NO_OPEN = process.argv.includes('--no-open') || !!process.env.CCAKASHIC_NO_OPEN;
 
 // CSRF guard for /api/resume: any webpage can POST to localhost, but only
 // pages we served know this token.
@@ -168,9 +174,47 @@ const server = http.createServer(async (req, res) => {
     }
 
     if (pathname === '/' || pathname === '') {
+      const requested = parseInt(url.searchParams.get('n') || '') || DEFAULT_PANE_COUNT;
+      const paneCount = PANE_COUNTS.includes(requested) ? requested : DEFAULT_PANE_COUNT;
+      const recent = await listRecentSessions(paneCount);
+      const panes = await Promise.all(recent.map(async (session) => ({
+        session,
+        bodyHtml: renderPaneBody(await parseSession(session.path)),
+      })));
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(generateDashboard(panes, paneCount, await buildResumeContext()));
+      return;
+    }
+
+    if (pathname === '/projects') {
       const projects = await listProjects();
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(generateIndex(projects));
+      return;
+    }
+
+    if (pathname === '/api/pane') {
+      const rawName = url.searchParams.get('project') || '';
+      const sessionId = url.searchParams.get('session') || '';
+      const since = parseFloat(url.searchParams.get('since') || '0');
+      const projects = await listProjects();
+      const project = projects.find((p) => p.rawName === rawName);
+      const sessionPath = project ? path.join(project.dir, `${sessionId}.jsonl`) : null;
+      if (!project || !sessionPath || !fs.existsSync(sessionPath)) {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Session not found' }));
+        return;
+      }
+      const mtime = fs.statSync(sessionPath).mtimeMs;
+      const status = paneStatus(mtime);
+      const ago = timeAgo(mtime);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      if (mtime <= since) {
+        res.end(JSON.stringify({ changed: false, status, ago }));
+        return;
+      }
+      const parsed = await parseSession(sessionPath);
+      res.end(JSON.stringify({ changed: true, mtime, status, ago, html: renderPaneBody(parsed) }));
       return;
     }
 

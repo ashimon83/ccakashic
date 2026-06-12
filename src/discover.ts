@@ -35,6 +35,11 @@ export interface CwdMatch {
   sessionId: string;
 }
 
+export interface RecentSession extends SessionPreview {
+  projectRawName: string;
+  projectName: string;
+}
+
 export function decodeDirName(dirName: string): string {
   // Directory names encode paths: /Users/foo/bar → -Users-foo-bar
   // This is lossy (dots become dashes too), but good enough for display
@@ -193,6 +198,26 @@ export async function listSessions(projectDir: string): Promise<SessionPreview[]
   const sessions = await Promise.all(jsonlFiles.map(getSessionPreview));
   sessions.sort((a, b) => b.lastModified - a.lastModified);
   return sessions;
+}
+
+export async function listRecentSessions(limit: number): Promise<RecentSession[]> {
+  const projects = await listProjects();
+  const entries: { file: string; mtime: number; project: Project }[] = [];
+  for (const project of projects) {
+    for (const f of fs.readdirSync(project.dir)) {
+      if (!f.endsWith('.jsonl')) continue;
+      const file = path.join(project.dir, f);
+      entries.push({ file, mtime: fs.statSync(file).mtimeMs, project });
+    }
+  }
+  entries.sort((a, b) => b.mtime - a.mtime);
+  const top = entries.slice(0, limit);
+  const previews = await Promise.all(top.map((e) => getSessionPreview(e.file)));
+  return previews.map((s, i) => ({
+    ...s,
+    projectRawName: top[i].project.rawName,
+    projectName: top[i].project.name,
+  }));
 }
 
 export function readCwdFromSession(filePath: string): Promise<string | null> {
