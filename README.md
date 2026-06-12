@@ -30,7 +30,8 @@ A local HTTP server starts and your browser opens automatically.
 
 ## Features
 
-- **Fully browser-based** — Project list → Session list → Conversation detail
+- **Dashboard** — The top page shows your 4/6/8 most recently active sessions across all projects side by side, each pane an independently scrollable thread of the last 24h, with live status dots (🟢 active / 🟡 recent / ⚪ idle) refreshed by polling
+- **Fully browser-based** — Dashboard → Project list → Session list → Conversation detail
 - **Chat-style layout** — User / assistant messages in chat bubbles
 - **Collapsible tool calls** — Bash, Read, Edit, and other tool invocations collapsed by default
 - **Diff view** — File edits shown with red/green line highlights
@@ -71,6 +72,9 @@ CCAKASHIC_PORT=3000 npx ccakashic
 
 # Skip cmux detection (regular browser, no resume buttons)
 npx ccakashic --no-cmux
+
+# Start the server without opening a browser
+npx ccakashic --no-open
 ```
 
 ## Requirements

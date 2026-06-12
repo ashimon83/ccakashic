@@ -270,6 +270,7 @@ export function generateIndex(projects: Project[]): string {
 
   return pageShell('ccakashic', `
 <div class="page-header">
+  <div class="breadcrumb"><a href="/">&larr; dashboard</a></div>
   <h1>ccakashic</h1>
   <div class="subtitle">Claude Code Session Logs</div>
 </div>
@@ -360,7 +361,7 @@ export function generateSessionList(project: Project, sessions: SessionPreview[]
   return pageShell(`${project.name} — ccakashic`, `
 <div class="sticky-date-bar" id="stickyDateBar"></div>
 <div class="page-header">
-  <div class="breadcrumb"><a href="/">ccakashic</a> / ${escapeHtml(project.name)}</div>
+  <div class="breadcrumb"><a href="/">dashboard</a> / <a href="/projects">projects</a> / ${escapeHtml(project.name)}</div>
   <h1>${escapeHtml(project.name)}</h1>
   <div class="subtitle">${sessions.length} sessions</div>
 </div>

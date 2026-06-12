@@ -129,7 +129,7 @@ function msgId(ts: string | number | Date | null | undefined): string {
   return `t${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
 }
 
-function renderMessage(msg: any): string {
+export function renderMessage(msg: any): string {
   const id = msgId(msg.timestamp);
   const time = `<a class="timestamp" href="#${id}">${formatTime(msg.timestamp)}</a>`;
 
@@ -363,7 +363,7 @@ export function generate(parsed: ParsedSession, options: GenerateOptions = {}): 
     ).join('\n');
 
   const backLink = backUrl
-    ? `<div style="font-size:0.8rem;margin-bottom:8px"><a href="${escapeHtml(backUrl)}" style="color:var(--link);text-decoration:none">&larr; Back to sessions</a> &nbsp;|&nbsp; <a href="/" style="color:var(--link);text-decoration:none">All projects</a></div>`
+    ? `<div style="font-size:0.8rem;margin-bottom:8px"><a href="${escapeHtml(backUrl)}" style="color:var(--link);text-decoration:none">&larr; Back to sessions</a> &nbsp;|&nbsp; <a href="/" style="color:var(--link);text-decoration:none">Dashboard</a> &nbsp;|&nbsp; <a href="/projects" style="color:var(--link);text-decoration:none">All projects</a></div>`
     : '';
 
   return `<!DOCTYPE html>
