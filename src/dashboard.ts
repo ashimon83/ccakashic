@@ -67,7 +67,7 @@ export interface DashboardPane {
 
 export function waitBadgeHtml(waiting: WaitState): string {
   if (!waiting) return '';
-  const label = waiting === 'permission' ? '\u{1F510} 承認待ち' : '⏳ 入力待ち';
+  const label = waiting === 'permission' ? '\u{1F510} Permission' : '⏳ Your turn';
   return `<span class="dash-wait-badge dash-wait-${waiting}">${label}</span>`;
 }
 
@@ -293,8 +293,8 @@ function dashboardJS(): string {
   var ICON_WAIT = svgIcon('#f97316');
 
   function waitBadge(state) {
-    if (state === 'permission') return '<span class="dash-wait-badge dash-wait-permission">\u{1F510} 承認待ち</span>';
-    if (state === 'input') return '<span class="dash-wait-badge dash-wait-input">⏳ 入力待ち</span>';
+    if (state === 'permission') return '<span class="dash-wait-badge dash-wait-permission">\u{1F510} Permission</span>';
+    if (state === 'input') return '<span class="dash-wait-badge dash-wait-input">⏳ Your turn</span>';
     return '';
   }
 
