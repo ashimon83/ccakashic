@@ -157,8 +157,23 @@ async function handleResume(req: http.IncomingMessage, res: http.ServerResponse)
   }
 }
 
+// Only accept loopback Host headers. The server binds 127.0.0.1, but without
+// this check a malicious site could DNS-rebind its hostname to 127.0.0.1 and
+// become same-origin, defeating the resume token and reading session content.
+function isAllowedHost(host: string | undefined): boolean {
+  if (!host) return false;
+  const hostname = host.replace(/:\d+$/, '').toLowerCase();
+  return hostname === '127.0.0.1' || hostname === 'localhost' || hostname === '[::1]' || hostname === '::1';
+}
+
 const server = http.createServer(async (req, res) => {
   try {
+    if (!isAllowedHost(req.headers.host)) {
+      res.writeHead(403, { 'Content-Type': 'text/plain' });
+      res.end('Forbidden: invalid Host header');
+      return;
+    }
+
     const url = new URL(req.url || '/', `http://localhost`);
     const pathname = url.pathname;
 

@@ -570,19 +570,23 @@ body {
 export function getAppJS(): string {
   return `
 (function() {
-  // Simple markdown renderer (no external dependency)
-  function renderMarkdown(text) {
-    // Escape HTML first (already escaped by server, but for client-side re-render)
-    // Actually the text is already HTML-escaped, so we need to unescape first
-    text = text
-      .replace(/&amp;/g, '&')
-      .replace(/&lt;/g, '<')
-      .replace(/&gt;/g, '>')
-      .replace(/&quot;/g, '"');
+  function esc(s) {
+    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  }
 
-    // Code blocks (fenced)
+  // Simple markdown renderer (no external dependency).
+  // SECURITY: callers pass el.textContent, which DECODES the server's HTML
+  // entities back to raw characters, so session content (semi-untrusted: it can
+  // contain text from fetched pages/files/tool output) arrives unescaped. We
+  // re-escape it up front before applying markdown — markdown syntax chars
+  // ([ ] ( ) * \` # -) are untouched by escaping so markdown still renders,
+  // while <, >, " stay inert as &lt; &gt; &quot; and cannot inject HTML.
+  function renderMarkdown(text) {
+    text = esc(text);
+
+    // Code blocks (fenced) — content is already escaped, do not re-escape
     text = text.replace(/\`\`\`(\\w*)?\\n([\\s\\S]*?)\`\`\`/g, function(m, lang, code) {
-      return '<pre><code class="language-' + (lang || '') + '">' + esc(code.trim()) + '</code></pre>';
+      return '<pre><code class="language-' + (lang || '') + '">' + code.trim() + '</code></pre>';
     });
 
     // Inline code
@@ -603,8 +607,13 @@ export function getAppJS(): string {
     text = text.replace(/^[\\-*] (.+)$/gm, '<li>$1</li>');
     text = text.replace(/(<li>.*<\\/li>\\n?)+/g, '<ul>$&</ul>');
 
-    // Links
-    text = text.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, '<a href="$2" target="_blank">$1</a>');
+    // Links — href is already escaped (so " is &quot; and can't break out of
+    // the attribute), but still allowlist safe schemes to block javascript:.
+    text = text.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(m, label, href) {
+      return /^(https?:\\/\\/|\\/|#)/i.test(href)
+        ? '<a href="' + href + '" target="_blank" rel="noopener">' + label + '</a>'
+        : label;
+    });
 
     // Paragraphs (simple: double newlines)
     text = text.replace(/\\n\\n/g, '</p><p>');
@@ -620,10 +629,6 @@ export function getAppJS(): string {
     text = text.replace(/(<\\/ul>)<\\/p>/g, '$1');
 
     return text;
-  }
-
-  function esc(s) {
-    return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   }
 
   // Render markdown in all [data-markdown] elements. Exposed globally so the
