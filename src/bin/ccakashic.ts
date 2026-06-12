@@ -6,14 +6,14 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { exec } from 'child_process';
 import { listProjects, listSessions, listRecentSessions, findSessionForCwd, readCwdFromSession } from '../discover';
-import { parseSession } from '../parser';
+import { parseSession, parseSessionCached } from '../parser';
 import { generate } from '../html-generator';
 import { generateIndex, generateSessionList } from '../pages';
 import { generateDashboard, renderPaneBody, paneStatus, timeAgo, PANE_COUNTS, DEFAULT_PANE_COUNT } from '../dashboard';
 import type { ResumeContext } from '../resume-ui';
 import {
   isCmuxAvailable,
-  listWorkspaceIds,
+  listWorkspaceIdsCached,
   loadResumeMap,
   saveResumeMapEntry,
   findLiveWorkspaceForSession,
@@ -65,7 +65,7 @@ async function buildResumeContext(): Promise<ResumeContext | undefined> {
   const openSessionIds = new Set<string>();
   if (cmuxAvailable) {
     try {
-      const live = await listWorkspaceIds();
+      const live = await listWorkspaceIdsCached();
       const map = loadResumeMap();
       for (const [sessionId, wsId] of Object.entries(map)) {
         if (live.has(wsId.toUpperCase())) openSessionIds.add(sessionId);
@@ -194,7 +194,7 @@ const server = http.createServer(async (req, res) => {
       const recent = await listRecentSessions(paneCount);
       const panes = await Promise.all(recent.map(async (session) => ({
         session,
-        bodyHtml: renderPaneBody(await parseSession(session.path)),
+        bodyHtml: renderPaneBody(await parseSessionCached(session.path, session.lastModified)),
       })));
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(generateDashboard(panes, paneCount, await buildResumeContext()));
@@ -224,11 +224,13 @@ const server = http.createServer(async (req, res) => {
       const status = paneStatus(mtime);
       const ago = timeAgo(mtime);
       res.writeHead(200, { 'Content-Type': 'application/json' });
+      // mtimeMs is sub-millisecond (nanosecond FS resolution) so distinct
+      // appends get distinct values; `<=` means "nothing newer since last poll".
       if (mtime <= since) {
         res.end(JSON.stringify({ changed: false, status, ago }));
         return;
       }
-      const parsed = await parseSession(sessionPath);
+      const parsed = await parseSessionCached(sessionPath, mtime);
       res.end(JSON.stringify({ changed: true, mtime, status, ago, html: renderPaneBody(parsed) }));
       return;
     }

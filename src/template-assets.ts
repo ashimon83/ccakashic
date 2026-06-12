@@ -609,8 +609,10 @@ export function getAppJS(): string {
 
     // Links — href is already escaped (so " is &quot; and can't break out of
     // the attribute), but still allowlist safe schemes to block javascript:.
+    // The leading-slash branch uses (?!\\/) so protocol-relative //evil.com
+    // (which navigates off-site) is rejected — only same-origin /path passes.
     text = text.replace(/\\[([^\\]]+)\\]\\(([^)]+)\\)/g, function(m, label, href) {
-      return /^(https?:\\/\\/|\\/|#)/i.test(href)
+      return /^(https?:\\/\\/|\\/(?!\\/)|#)/i.test(href)
         ? '<a href="' + href + '" target="_blank" rel="noopener">' + label + '</a>'
         : label;
     });

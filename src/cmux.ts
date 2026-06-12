@@ -54,6 +54,21 @@ export async function listWorkspaceIds(): Promise<Set<string>> {
   return ids;
 }
 
+let cachedWorkspaceIds: { value: Set<string>; at: number } | null = null;
+
+// Cached variant for page renders: buildResumeContext runs on every request
+// and only needs workspace liveness to pick the Resume vs Jump button label,
+// which tolerates a few seconds of staleness. Avoids spawning a cmux
+// subprocess on each navigation.
+export async function listWorkspaceIdsCached(): Promise<Set<string>> {
+  if (cachedWorkspaceIds && Date.now() - cachedWorkspaceIds.at < 5_000) {
+    return cachedWorkspaceIds.value;
+  }
+  const value = await listWorkspaceIds();
+  cachedWorkspaceIds = { value, at: Date.now() };
+  return value;
+}
+
 export async function currentWorkspaceId(): Promise<string | null> {
   try {
     const out = await run(['--json', '--id-format', 'both', 'current-workspace']);
@@ -125,7 +140,12 @@ export function saveResumeMapEntry(sessionId: string, workspaceId: string): void
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
     const map = loadResumeMap();
     map[sessionId] = workspaceId;
-    fs.writeFileSync(RESUME_MAP_FILE, JSON.stringify(map, null, 2));
+    // Atomic write: a crash mid-write would otherwise truncate the file, and
+    // loadResumeMap swallows the parse error and returns {} — wiping every
+    // mapping. Write to a temp file and rename (atomic on the same fs).
+    const tmp = `${RESUME_MAP_FILE}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(map, null, 2));
+    fs.renameSync(tmp, RESUME_MAP_FILE);
   } catch {
     // best-effort: losing the map only means a duplicate workspace later
   }

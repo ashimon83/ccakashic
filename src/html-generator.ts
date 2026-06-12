@@ -2,14 +2,7 @@ import { getCSS, getAppJS } from './template-assets';
 import type { Message, ParsedSession, UsageStats } from './parser';
 import type { SessionPreview } from './discover';
 import { resumeButtonsHtml, resumeCSS, resumeJS, type ResumeContext } from './resume-ui';
-
-function escapeHtml(str: unknown): string {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+import { escapeHtml } from './util';
 
 function formatTime(ts: string | number | Date | null | undefined): string {
   if (!ts) return '';

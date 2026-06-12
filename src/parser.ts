@@ -24,6 +24,33 @@ export interface ParsedSession {
   stats: UsageStats;
 }
 
+// Small LRU cache keyed on (path, mtime). The dashboard's server-side render
+// and the /api/pane poll can ask for the same (unchanged) session, and several
+// panes/clients may show the same session; this avoids re-reading and
+// re-parsing the whole file for an identical mtime. NOTE: an actively-changing
+// session gets a new mtime each poll (cache miss) and is still fully re-parsed;
+// a future optimization could read only the bytes appended past the last offset.
+const parseCache = new Map<string, { mtimeMs: number; parsed: ParsedSession }>();
+const PARSE_CACHE_MAX = 32;
+
+export async function parseSessionCached(sessionPath: string, mtimeMs: number): Promise<ParsedSession> {
+  const key = sessionPath;
+  const hit = parseCache.get(key);
+  if (hit && hit.mtimeMs === mtimeMs) {
+    // Refresh LRU recency.
+    parseCache.delete(key);
+    parseCache.set(key, hit);
+    return hit.parsed;
+  }
+  const parsed = await parseSession(sessionPath);
+  parseCache.set(key, { mtimeMs, parsed });
+  if (parseCache.size > PARSE_CACHE_MAX) {
+    const oldest = parseCache.keys().next().value;
+    if (oldest !== undefined) parseCache.delete(oldest);
+  }
+  return parsed;
+}
+
 export async function parseSession(sessionPath: string): Promise<ParsedSession> {
   const lines = await readJsonlLines(sessionPath);
   const messages = buildConversation(lines);

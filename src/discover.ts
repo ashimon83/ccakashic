@@ -49,46 +49,73 @@ export function decodeDirName(dirName: string): string {
   return dirName;
 }
 
-export async function listProjects(): Promise<Project[]> {
-  if (!fs.existsSync(CLAUDE_DIR)) {
+interface ProjectScan {
+  rawName: string;
+  dir: string;
+  name: string;
+  files: { file: string; mtimeMs: number }[];
+}
+
+// Stat every .jsonl in a project dir once. Tolerant of files/dirs disappearing
+// mid-scan (a live `claude` process may be rotating them).
+function statSessionFiles(projectDir: string): { file: string; mtimeMs: number }[] {
+  let names: string[];
+  try {
+    names = fs.readdirSync(projectDir);
+  } catch {
+    return [];
+  }
+  const out: { file: string; mtimeMs: number }[] = [];
+  for (const f of names) {
+    if (!f.endsWith('.jsonl')) continue;
+    try {
+      out.push({ file: f, mtimeMs: fs.statSync(path.join(projectDir, f)).mtimeMs });
+    } catch {
+      // removed between readdir and stat
+    }
+  }
+  return out;
+}
+
+// Single source of truth for walking ~/.claude/projects. Both listProjects and
+// listRecentSessions build on this so the filesystem is walked/statted once.
+async function scanProjects(): Promise<ProjectScan[]> {
+  if (!fs.existsSync(CLAUDE_DIR)) return [];
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(CLAUDE_DIR, { withFileTypes: true });
+  } catch {
     return [];
   }
 
-  const entries = fs.readdirSync(CLAUDE_DIR, { withFileTypes: true });
-  const projects: Project[] = [];
-
+  const scans: ProjectScan[] = [];
   for (const entry of entries) {
     if (!entry.isDirectory()) continue;
+    const dir = path.join(CLAUDE_DIR, entry.name);
+    const files = statSessionFiles(dir);
+    if (files.length === 0) continue;
 
-    const projectDir = path.join(CLAUDE_DIR, entry.name);
-    const jsonlFiles = fs.readdirSync(projectDir).filter((f) => f.endsWith('.jsonl'));
-
-    if (jsonlFiles.length === 0) continue;
-
-    let lastModified = 0;
-    for (const f of jsonlFiles) {
-      const stat = fs.statSync(path.join(projectDir, f));
-      if (stat.mtimeMs > lastModified) lastModified = stat.mtimeMs;
-    }
-
-    // Prefer the real cwd recorded in the session over the lossy directory-name
-    // decoding (dots and slashes both collapse to dashes in the dir name).
+    // Prefer the real cwd recorded in the latest session over the lossy
+    // directory-name decoding (dots and slashes both collapse to dashes).
     let name = decodeDirName(entry.name);
-    const latest = latestSessionFile(projectDir);
-    if (latest) {
-      const cwd = await readCwdFromSession(path.join(projectDir, latest.file));
-      if (cwd) name = cwd;
-    }
+    const latest = files.reduce((a, b) => (b.mtimeMs > a.mtimeMs ? b : a));
+    const cwd = await readCwdFromSession(path.join(dir, latest.file));
+    if (cwd) name = cwd;
 
-    projects.push({
-      name,
-      rawName: entry.name,
-      dir: projectDir,
-      sessionCount: jsonlFiles.length,
-      lastModified: new Date(lastModified),
-    });
+    scans.push({ rawName: entry.name, dir, name, files });
   }
+  return scans;
+}
 
+export async function listProjects(): Promise<Project[]> {
+  const scans = await scanProjects();
+  const projects = scans.map((s) => ({
+    name: s.name,
+    rawName: s.rawName,
+    dir: s.dir,
+    sessionCount: s.files.length,
+    lastModified: new Date(Math.max(...s.files.map((f) => f.mtimeMs))),
+  }));
   projects.sort((a, b) => b.lastModified.getTime() - a.lastModified.getTime());
   return projects;
 }
@@ -201,13 +228,11 @@ export async function listSessions(projectDir: string): Promise<SessionPreview[]
 }
 
 export async function listRecentSessions(limit: number): Promise<RecentSession[]> {
-  const projects = await listProjects();
-  const entries: { file: string; mtime: number; project: Project }[] = [];
-  for (const project of projects) {
-    for (const f of fs.readdirSync(project.dir)) {
-      if (!f.endsWith('.jsonl')) continue;
-      const file = path.join(project.dir, f);
-      entries.push({ file, mtime: fs.statSync(file).mtimeMs, project });
+  const scans = await scanProjects();
+  const entries: { file: string; mtime: number; scan: ProjectScan }[] = [];
+  for (const scan of scans) {
+    for (const f of scan.files) {
+      entries.push({ file: path.join(scan.dir, f.file), mtime: f.mtimeMs, scan });
     }
   }
   entries.sort((a, b) => b.mtime - a.mtime);
@@ -215,8 +240,8 @@ export async function listRecentSessions(limit: number): Promise<RecentSession[]
   const previews = await Promise.all(top.map((e) => getSessionPreview(e.file)));
   return previews.map((s, i) => ({
     ...s,
-    projectRawName: top[i].project.rawName,
-    projectName: top[i].project.name,
+    projectRawName: top[i].scan.rawName,
+    projectName: top[i].scan.name,
   }));
 }
 

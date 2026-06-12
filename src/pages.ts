@@ -1,14 +1,7 @@
 import { getCSS } from './template-assets';
 import type { Project, SessionPreview } from './discover';
 import { resumeButtonsHtml, resumeCSS, resumeJS, type ResumeContext } from './resume-ui';
-
-function escapeHtml(str: unknown): string {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
+import { escapeHtml } from './util';
 
 function formatDate(ts: string | number | Date | null | undefined): string {
   if (!ts) return '';
@@ -82,6 +75,7 @@ function indexCSS(): string {
 }
 .list-item {
   display: block;
+  position: relative;
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: 8px;
@@ -90,6 +84,12 @@ function indexCSS(): string {
   color: var(--text);
   transition: background 0.15s, border-color 0.15s;
   cursor: pointer;
+}
+/* Full-cover navigation link for div-based rows (keeps <button>s out of <a>). */
+.list-item-link {
+  position: absolute;
+  inset: 0;
+  z-index: 0;
 }
 .list-item:hover {
   background: var(--bg-secondary);
@@ -345,11 +345,16 @@ export function generateSessionList(project: Project, sessions: SessionPreview[]
         : `<div class="list-item-title">${lastModTime} ${slug} ${sub}</div>
   <div class="list-item-meta"><span>started: ${startedTime}</span>${model}${branch}${tokens}${outTok}</div>`;
 
-      return `<a class="list-item" href="${href}">
+      // Stretched-link pattern: the row is a <div> (not an <a>) so the resume
+      // <button>s aren't nested inside an anchor (invalid HTML). A full-cover
+      // link handles row navigation; the buttons sit above it via z-index.
+      const label = escapeHtml(displayName || s.id);
+      return `<div class="list-item">
+  <a class="list-item-link" href="${href}" aria-label="${label}"></a>
   ${titleRow}
   ${preview}
   ${resumeButtonsHtml(project.rawName, s, resume)}
-</a>`;
+</div>`;
     }).join('\n');
 
     return `<div class="date-group" id="date-${g.date}" data-date="${escapeHtml(g.date)}">
