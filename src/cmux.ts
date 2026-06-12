@@ -69,6 +69,40 @@ export async function listWorkspaceIdsCached(): Promise<Set<string>> {
   return value;
 }
 
+export type WaitReason = 'permission' | 'input';
+
+// Map of workspaceId → wait reason, derived from cmux's UNREAD notifications.
+// cmux marks a notification read once you focus its workspace, so an unread
+// "Claude is waiting" / "needs your permission" is a live "needs attention"
+// signal that matches the desktop notification ring.
+export function parseWaitingNotifications(data: any): Map<string, WaitReason> {
+  const result = new Map<string, WaitReason>();
+  if (!Array.isArray(data)) return result;
+  for (const n of data) {
+    if (!n || n.is_read || !n.workspace_id) continue;
+    const body = String(n.body || '').toLowerCase();
+    const reason: WaitReason = body.includes('permission') ? 'permission' : 'input';
+    // permission outranks a plain input wait if both exist for one workspace
+    const ws = String(n.workspace_id).toUpperCase();
+    if (reason === 'permission' || !result.has(ws)) result.set(ws, reason);
+  }
+  return result;
+}
+
+export async function listWaitingWorkspaces(): Promise<Map<string, WaitReason>> {
+  const out = await run(['--json', 'list-notifications']);
+  return parseWaitingNotifications(JSON.parse(out));
+}
+
+let cachedWaiting: { value: Map<string, WaitReason>; at: number } | null = null;
+
+export async function listWaitingWorkspacesCached(): Promise<Map<string, WaitReason>> {
+  if (cachedWaiting && Date.now() - cachedWaiting.at < 5_000) return cachedWaiting.value;
+  const value = await listWaitingWorkspaces();
+  cachedWaiting = { value, at: Date.now() };
+  return value;
+}
+
 export async function currentWorkspaceId(): Promise<string | null> {
   try {
     const out = await run(['--json', '--id-format', 'both', 'current-workspace']);
@@ -149,6 +183,16 @@ export function saveResumeMapEntry(sessionId: string, workspaceId: string): void
   } catch {
     // best-effort: losing the map only means a duplicate workspace later
   }
+}
+
+// Inverse of the resume map: workspaceId(upper) → sessionId. Only covers
+// sessions ccakashic itself resumed (manually-opened ones aren't tracked).
+export function loadWorkspaceToSession(): Map<string, string> {
+  const inv = new Map<string, string>();
+  for (const [sessionId, wsId] of Object.entries(loadResumeMap())) {
+    inv.set(wsId.toUpperCase(), sessionId);
+  }
+  return inv;
 }
 
 export async function findLiveWorkspaceForSession(sessionId: string): Promise<string | null> {
