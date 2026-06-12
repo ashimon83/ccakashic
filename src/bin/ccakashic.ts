@@ -3,8 +3,8 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import * as crypto from 'crypto';
 import { exec } from 'child_process';
+import { getOrCreateToken } from '../util';
 import { listProjects, listSessions, listRecentSessions, findSessionForCwd, readCwdFromSession } from '../discover';
 import { parseSession, parseSessionCached } from '../parser';
 import { generate } from '../html-generator';
@@ -59,8 +59,9 @@ const NO_CMUX = process.argv.includes('--no-cmux') || !!process.env.CCAKASHIC_NO
 const NO_OPEN = process.argv.includes('--no-open') || !!process.env.CCAKASHIC_NO_OPEN;
 
 // CSRF guard for /api/resume: any webpage can POST to localhost, but only
-// pages we served know this token.
-const RESUME_TOKEN = crypto.randomBytes(16).toString('hex');
+// pages we served know this token. Persisted across restarts so open tabs keep
+// working without a reload.
+const RESUME_TOKEN = getOrCreateToken();
 
 async function buildResumeContext(): Promise<ResumeContext | undefined> {
   if (NO_CMUX) return undefined;
