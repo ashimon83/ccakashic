@@ -1,4 +1,5 @@
 import { buildResumeCommand } from './cmux';
+import { escapeHtml, ACTIVE_THRESHOLD_MS } from './util';
 
 // Shared UI for the "resume this session in cmux" feature: button markup,
 // styles, and the client-side script that talks to POST /api/resume.
@@ -13,18 +14,6 @@ export interface ResumableSession {
   id: string;
   cwd: string | null;
   lastModified: number;
-}
-
-// A session touched this recently is probably still attached to a live
-// `claude` process; resuming it would fork the conversation.
-const ACTIVE_THRESHOLD_MS = 2 * 60_000;
-
-function escapeHtml(str: unknown): string {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 export function resumeButtonsHtml(
@@ -55,6 +44,9 @@ export function resumeCSS(): string {
   display: inline-flex;
   gap: 6px;
   margin-top: 6px;
+  /* Sit above the stretched .list-item-link so the buttons stay clickable. */
+  position: relative;
+  z-index: 1;
 }
 .resume-btn, .copy-cmd-btn {
   font-size: 0.72rem;

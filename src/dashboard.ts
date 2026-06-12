@@ -3,6 +3,7 @@ import { renderMessage } from './html-generator';
 import type { ParsedSession } from './parser';
 import type { RecentSession } from './discover';
 import { resumeButtonsHtml, resumeCSS, resumeJS, type ResumeContext } from './resume-ui';
+import { escapeHtml, ACTIVE_THRESHOLD_MS } from './util';
 
 // Multi-pane dashboard: the N most recently active sessions across all
 // projects, each pane showing the last 24h of conversation as a scrollable
@@ -15,14 +16,6 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 // Keep panes light: a busy session can have thousands of messages in 24h.
 const MAX_PANE_MESSAGES = 150;
 
-function escapeHtml(str: unknown): string {
-  return String(str)
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
-}
-
 export function timeAgo(mtime: number): string {
   const diff = Date.now() - mtime;
   if (diff < 60_000) return 'just now';
@@ -33,16 +26,21 @@ export function timeAgo(mtime: number): string {
 
 export function paneStatus(mtime: number): 'active' | 'recent' | 'idle' {
   const diff = Date.now() - mtime;
-  if (diff < 2 * 60_000) return 'active';
+  if (diff < ACTIVE_THRESHOLD_MS) return 'active';
   if (diff < 30 * 60_000) return 'recent';
   return 'idle';
 }
 
 export function renderPaneBody(parsed: ParsedSession): string {
   const cutoff = Date.now() - DAY_MS;
-  let messages = parsed.messages.filter(
-    (m: any) => m.timestamp && new Date(m.timestamp).getTime() >= cutoff
-  );
+  // Exclude only messages we can positively place before the cutoff. Messages
+  // with a missing or unparseable timestamp (some tool/meta records) are kept
+  // rather than silently dropped — they interleave with timestamped ones and
+  // are usually part of the recent tail.
+  let messages = parsed.messages.filter((m: any) => {
+    const t = m.timestamp ? new Date(m.timestamp).getTime() : NaN;
+    return isNaN(t) || t >= cutoff;
+  });
   let note = '';
   if (messages.length === 0) {
     // Nothing in the last 24h: show the tail so the pane isn't empty.
