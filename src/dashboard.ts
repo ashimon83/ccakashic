@@ -57,9 +57,18 @@ function paneTitle(s: RecentSession): string {
   return s.customTitle || s.aiTitle || s.slug || s.id.slice(0, 8);
 }
 
+export type WaitState = 'input' | 'permission' | null;
+
 export interface DashboardPane {
   session: RecentSession;
   bodyHtml: string;
+  waiting: WaitState;
+}
+
+export function waitBadgeHtml(waiting: WaitState): string {
+  if (!waiting) return '';
+  const label = waiting === 'permission' ? '\u{1F510} 承認待ち' : '⏳ 入力待ち';
+  return `<span class="dash-wait-badge dash-wait-${waiting}">${label}</span>`;
 }
 
 export function generateDashboard(
@@ -70,15 +79,15 @@ export function generateDashboard(
   const cols = paneCount <= 4 ? Math.max(panes.length, 1) : Math.ceil(paneCount / 2);
   const rows = paneCount <= 4 ? 1 : 2;
 
-  const panesHtml = panes.map(({ session: s, bodyHtml }) => {
+  const panesHtml = panes.map(({ session: s, bodyHtml, waiting }) => {
     const status = paneStatus(s.lastModified);
     const detailUrl = `/project/${encodeURIComponent(s.projectRawName)}/session/${encodeURIComponent(s.id)}`;
     const projectLabel = s.projectName.split('/').pop() || s.projectName;
     const branch = s.gitBranch && s.gitBranch !== 'HEAD' ? `<span class="dash-meta-item">${escapeHtml(s.gitBranch)}</span>` : '';
-    return `<div class="dash-pane" data-project="${escapeHtml(s.projectRawName)}" data-session="${escapeHtml(s.id)}" data-mtime="${s.lastModified}">
+    return `<div class="dash-pane${waiting ? ' dash-pane-waiting' : ''}" data-project="${escapeHtml(s.projectRawName)}" data-session="${escapeHtml(s.id)}" data-mtime="${s.lastModified}" data-waiting="${waiting || ''}">
   <div class="dash-pane-header">
     <div class="dash-pane-titles">
-      <div class="dash-pane-title"><span class="dash-dot dash-dot-${status}" title="${status}"></span><a href="${detailUrl}">${escapeHtml(paneTitle(s))}</a></div>
+      <div class="dash-pane-title"><span class="dash-dot dash-dot-${status}" title="${status}"></span><a href="${detailUrl}">${escapeHtml(paneTitle(s))}</a><span class="dash-wait-slot">${waitBadgeHtml(waiting)}</span></div>
       <div class="dash-pane-meta">
         <span class="dash-meta-item dash-meta-project" title="${escapeHtml(s.projectName)}">${escapeHtml(projectLabel)}</span>
         ${branch}
@@ -101,6 +110,7 @@ export function generateDashboard(
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>ccakashic — dashboard</title>
+<link rel="icon" id="dash-favicon" href="data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="#2563eb"/></svg>')}">
 <style>${getCSS()}
 ${resumeCSS()}
 ${dashboardCSS(cols, rows)}
@@ -205,6 +215,28 @@ function dashboardCSS(cols: number, rows: number): string {
   overflow: hidden;
 }
 .dash-pane-header .resume-actions { margin-top: 0; flex-shrink: 0; }
+
+/* Waiting-for-user emphasis: orange frame + glow so it stands out at a glance. */
+.dash-pane-waiting {
+  border-color: #f97316;
+  box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.35);
+}
+.dash-pane-waiting .dash-pane-header { background: rgba(249, 115, 22, 0.12); }
+.dash-wait-slot:empty { display: none; }
+.dash-wait-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 7px;
+  border-radius: 10px;
+  font-size: 0.68rem;
+  font-weight: 700;
+  vertical-align: middle;
+  white-space: nowrap;
+  background: #f97316;
+  color: #fff;
+}
+.dash-wait-permission { background: #dc2626; animation: dash-pulse 1.2s ease-in-out infinite; }
+
 .dash-dot {
   display: inline-block;
   width: 8px;
@@ -251,6 +283,39 @@ function dashboardJS(): string {
 
   document.querySelectorAll('.dash-pane-body').forEach(scrollToBottom);
 
+  var BASE_TITLE = 'ccakashic';
+  var ICON_NORMAL = document.getElementById('dash-favicon').href;
+  function svgIcon(fill) {
+    return 'data:image/svg+xml,' + encodeURIComponent(
+      '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16"><rect width="16" height="16" rx="3" fill="' + fill + '"/></svg>'
+    );
+  }
+  var ICON_WAIT = svgIcon('#f97316');
+
+  function waitBadge(state) {
+    if (state === 'permission') return '<span class="dash-wait-badge dash-wait-permission">\u{1F510} 承認待ち</span>';
+    if (state === 'input') return '<span class="dash-wait-badge dash-wait-input">⏳ 入力待ち</span>';
+    return '';
+  }
+
+  // Reflect the number of sessions awaiting the user into the tab title and
+  // favicon, so a glance at the browser tab is enough.
+  function syncWaitingIndicator() {
+    var waiting = document.querySelectorAll('.dash-pane[data-waiting="input"], .dash-pane[data-waiting="permission"]').length;
+    document.title = waiting ? '(' + waiting + ') ' + BASE_TITLE + ' — dashboard' : BASE_TITLE + ' — dashboard';
+    var icon = document.getElementById('dash-favicon');
+    if (icon) icon.href = waiting ? ICON_WAIT : ICON_NORMAL;
+  }
+
+  function applyWaiting(pane, state) {
+    var norm = (state === 'input' || state === 'permission') ? state : '';
+    if ((pane.dataset.waiting || '') === norm) return;
+    pane.dataset.waiting = norm;
+    pane.classList.toggle('dash-pane-waiting', !!norm);
+    var slot = pane.querySelector('.dash-wait-slot');
+    if (slot) slot.innerHTML = waitBadge(norm);
+  }
+
   function refreshPane(pane) {
     var body = pane.querySelector('.dash-pane-body');
     var url = '/api/pane?project=' + encodeURIComponent(pane.dataset.project)
@@ -261,6 +326,7 @@ function dashboardJS(): string {
       if (dot && data.status) dot.className = 'dash-dot dash-dot-' + data.status;
       var ago = pane.querySelector('.dash-ago');
       if (ago && data.ago) ago.textContent = data.ago;
+      if ('waiting' in data) { applyWaiting(pane, data.waiting); syncWaitingIndicator(); }
       if (!data.changed) return;
       pane.dataset.mtime = data.mtime;
       var nearBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 60;
@@ -270,6 +336,7 @@ function dashboardJS(): string {
     }).catch(function() { /* server briefly unavailable; retry next tick */ });
   }
 
+  syncWaitingIndicator();
   setInterval(function() {
     document.querySelectorAll('.dash-pane').forEach(refreshPane);
   }, POLL_MS);

@@ -6,14 +6,17 @@ import * as path from 'path';
 import * as crypto from 'crypto';
 import { exec } from 'child_process';
 import { listProjects, listSessions, listRecentSessions, findSessionForCwd, readCwdFromSession } from '../discover';
-import { parseSession, parseSessionCached } from '../parser';
+import { parseSession, parseSessionCached, type SessionActivity } from '../parser';
 import { generate } from '../html-generator';
 import { generateIndex, generateSessionList } from '../pages';
-import { generateDashboard, renderPaneBody, paneStatus, timeAgo, PANE_COUNTS, DEFAULT_PANE_COUNT } from '../dashboard';
+import { generateDashboard, renderPaneBody, paneStatus, timeAgo, PANE_COUNTS, DEFAULT_PANE_COUNT, type WaitState } from '../dashboard';
+import type { WaitReason } from '../cmux';
 import type { ResumeContext } from '../resume-ui';
 import {
   isCmuxAvailable,
   listWorkspaceIdsCached,
+  listWaitingWorkspacesCached,
+  loadWorkspaceToSession,
   loadResumeMap,
   saveResumeMapEntry,
   findLiveWorkspaceForSession,
@@ -75,6 +78,37 @@ async function buildResumeContext(): Promise<ResumeContext | undefined> {
     }
   }
   return { token: RESUME_TOKEN, cmuxAvailable, openSessionIds };
+}
+
+// sessionId → wait reason, from cmux's unread notifications mapped through the
+// resume map. Only covers ccakashic-resumed sessions; others fall back to the
+// jsonl-derived activity below. Empty when cmux is unavailable/disabled.
+async function buildCmuxWaitMap(): Promise<Map<string, WaitReason>> {
+  const result = new Map<string, WaitReason>();
+  if (NO_CMUX || !(await isCmuxAvailable())) return result;
+  try {
+    const waiting = await listWaitingWorkspacesCached();
+    const wsToSession = loadWorkspaceToSession();
+    for (const [wsId, reason] of waiting) {
+      const sessionId = wsToSession.get(wsId);
+      if (sessionId) result.set(sessionId, reason);
+    }
+  } catch {
+    // notifications are an enrichment; jsonl activity still drives the badge
+  }
+  return result;
+}
+
+// Combine the cmux signal (authoritative reason: input vs permission) with the
+// jsonl tail heuristic (universal, works for sessions cmux can't map).
+function resolveWaiting(
+  sessionId: string,
+  activity: SessionActivity,
+  cmuxWait: Map<string, WaitReason>,
+): WaitState {
+  const reason = cmuxWait.get(sessionId);
+  if (reason) return reason;
+  return activity === 'waiting' ? 'input' : null;
 }
 
 function readJsonBody(req: http.IncomingMessage): Promise<any> {
@@ -192,10 +226,15 @@ const server = http.createServer(async (req, res) => {
       const requested = parseInt(url.searchParams.get('n') || '') || DEFAULT_PANE_COUNT;
       const paneCount = PANE_COUNTS.includes(requested) ? requested : DEFAULT_PANE_COUNT;
       const recent = await listRecentSessions(paneCount);
-      const panes = await Promise.all(recent.map(async (session) => ({
-        session,
-        bodyHtml: renderPaneBody(await parseSessionCached(session.path, session.lastModified)),
-      })));
+      const cmuxWait = await buildCmuxWaitMap();
+      const panes = await Promise.all(recent.map(async (session) => {
+        const parsed = await parseSessionCached(session.path, session.lastModified);
+        return {
+          session,
+          bodyHtml: renderPaneBody(parsed),
+          waiting: resolveWaiting(session.id, parsed.activity, cmuxWait),
+        };
+      }));
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(generateDashboard(panes, paneCount, await buildResumeContext()));
       return;
@@ -223,15 +262,21 @@ const server = http.createServer(async (req, res) => {
       const mtime = fs.statSync(sessionPath).mtimeMs;
       const status = paneStatus(mtime);
       const ago = timeAgo(mtime);
+      const cmuxWait = await buildCmuxWaitMap();
       res.writeHead(200, { 'Content-Type': 'application/json' });
       // mtimeMs is sub-millisecond (nanosecond FS resolution) so distinct
       // appends get distinct values; `<=` means "nothing newer since last poll".
+      // We still re-evaluate waiting state even when the body is unchanged,
+      // since a cmux permission prompt doesn't append to the jsonl.
       if (mtime <= since) {
-        res.end(JSON.stringify({ changed: false, status, ago }));
+        const parsedUnchanged = await parseSessionCached(sessionPath, mtime);
+        const waiting = resolveWaiting(sessionId, parsedUnchanged.activity, cmuxWait);
+        res.end(JSON.stringify({ changed: false, status, ago, waiting }));
         return;
       }
       const parsed = await parseSessionCached(sessionPath, mtime);
-      res.end(JSON.stringify({ changed: true, mtime, status, ago, html: renderPaneBody(parsed) }));
+      const waiting = resolveWaiting(sessionId, parsed.activity, cmuxWait);
+      res.end(JSON.stringify({ changed: true, mtime, status, ago, waiting, html: renderPaneBody(parsed) }));
       return;
     }
 

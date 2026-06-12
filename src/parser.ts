@@ -17,11 +17,41 @@ export interface UsageStats {
   durationMs: number;
 }
 
+// Whether the session is waiting on the user (assistant finished its turn) or
+// busy (a tool is running / Claude is mid-response). 'unknown' when the tail has
+// no conversational record to judge from.
+export type SessionActivity = 'waiting' | 'working' | 'unknown';
+
 export interface ParsedSession {
   messages: Message[];
   subagents: Record<string, Message[]>;
   sessionPath: string;
   stats: UsageStats;
+  activity: SessionActivity;
+}
+
+// Scan raw lines from the end for the last real user/assistant turn. A session
+// is "waiting" when the assistant ended its turn with nothing after it; it is
+// "working" when a tool call is outstanding or the user just spoke. Non-turn
+// records (bridge-session, permission-mode, custom-title, summary, …) are
+// skipped so they don't mask the true state.
+export function deriveActivity(lines: RawLine[]): SessionActivity {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i];
+    if (!l || (l.type !== 'user' && l.type !== 'assistant')) continue;
+    const msg = l.message;
+    if (!msg) continue;
+    const blocks = Array.isArray(msg.content) ? msg.content : [];
+    if (l.type === 'assistant') {
+      const hasToolUse = blocks.some((b: any) => b && b.type === 'tool_use');
+      if (msg.stop_reason === 'tool_use' || hasToolUse) return 'working';
+      return 'waiting';
+    }
+    // A user turn (real text) or a tool_result fed back both mean Claude is
+    // about to respond / still working.
+    return 'working';
+  }
+  return 'unknown';
 }
 
 // Small LRU cache keyed on (path, mtime). The dashboard's server-side render
@@ -73,7 +103,7 @@ export async function parseSession(sessionPath: string): Promise<ParsedSession> 
 
   const stats = aggregateUsage(lines);
 
-  return { messages, subagents: {}, sessionPath, stats };
+  return { messages, subagents: {}, sessionPath, stats, activity: deriveActivity(lines) };
 }
 
 function aggregateUsage(lines: RawLine[]): UsageStats {
