@@ -88,12 +88,12 @@ export async function resumeInNewWorkspace(
       // title is cosmetic; the workspace is already running
     }
   }
-  if (prev) {
-    try {
-      await selectWorkspace(prev);
-    } catch {
-      // staying on the new workspace is an acceptable fallback
-    }
+  // Foreground: jump to the new workspace (new-workspace doesn't reliably
+  // focus it). Background: restore the workspace we were on.
+  try {
+    await selectWorkspace(prev || workspaceId);
+  } catch {
+    // focus is best-effort; the workspace is already running either way
   }
   return { workspaceId };
 }
