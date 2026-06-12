@@ -63,6 +63,7 @@ When the [cmux](https://github.com/manaflow-ai/cmux) terminal is detected (`cmux
 Notes:
 
 - cmux's socket only accepts callers inside the cmux process tree, so run `npx ccakashic` from a terminal **inside cmux** (or configure a socket password in cmux settings and export `CMUX_SOCKET_PASSWORD`)
+- The `cmux` binary is found via `$PATH`, then the common Homebrew locations. If it lives elsewhere, point `CCAKASHIC_CMUX` at it (e.g. `CCAKASHIC_CMUX=/path/to/cmux npx ccakashic`)
 - Disable the integration with `--no-cmux` or `CCAKASHIC_NO_CMUX=1`
 
 ## Options

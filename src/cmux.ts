@@ -6,9 +6,32 @@ import * as path from 'path';
 const CONFIG_DIR = path.join(os.homedir(), '.config', 'ccakashic');
 const RESUME_MAP_FILE = path.join(CONFIG_DIR, 'resume-map.json');
 
+// Resolve the cmux binary. PATH alone is unreliable: `npx ccakashic` is often
+// launched from a GUI terminal / login shell whose PATH omits Homebrew, so a
+// bare execFile('cmux') fails with ENOENT and the whole integration silently
+// disables (only the Copy button survives). Honor CCAKASHIC_CMUX, then fall
+// back to PATH, then to the common install locations.
+function resolveCmuxBin(): string {
+  const candidates = [
+    process.env.CCAKASHIC_CMUX,
+    '/opt/homebrew/bin/cmux', // Apple Silicon Homebrew
+    '/usr/local/bin/cmux',    // Intel Homebrew / manual installs
+  ].filter(Boolean) as string[];
+  for (const c of candidates) {
+    try {
+      if (fs.existsSync(c)) return c;
+    } catch {
+      // ignore and try the next candidate
+    }
+  }
+  return 'cmux'; // last resort: rely on PATH
+}
+
+const CMUX_BIN = resolveCmuxBin();
+
 function run(args: string[], timeoutMs = 5000): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile('cmux', args, { timeout: timeoutMs }, (err, stdout, stderr) => {
+    execFile(CMUX_BIN, args, { timeout: timeoutMs }, (err, stdout, stderr) => {
       if (err) {
         if (process.env.CCAKASHIC_DEBUG) console.error('[cmux]', args.join(' '), '->', err.message, stderr);
         reject(new Error((stderr || err.message).trim()));
