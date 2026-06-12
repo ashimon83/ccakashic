@@ -44,13 +44,33 @@ A local HTTP server starts and your browser opens automatically.
 - **Dark mode** — Follows `prefers-color-scheme` automatically
 - **Filter search** — Incremental filtering on list pages
 - **Keyboard navigation** — `j` / `k` to move between messages
+- **One-click resume in cmux** — `▶ Resume` spawns a [cmux](https://github.com/manaflow-ai/cmux) workspace that runs `cd <session cwd> && claude --resume <id>`; `📋 Copy` copies the same command for any terminal
 - **Zero dependencies** — Node.js built-in modules only
+
+## cmux integration
+
+When the [cmux](https://github.com/manaflow-ai/cmux) terminal is detected (`cmux ping` succeeds), ccakashic becomes a session dashboard:
+
+- The UI opens in a cmux browser pane instead of your default browser
+- Every session with a recorded `cwd` gets a `▶ Resume` button: one click creates a new cmux workspace, `cd`s into the session's directory, and runs `claude --resume <session-id>` — the workspace is renamed to the session title
+- Resuming the same session again jumps to the already-open workspace instead of forking the conversation (the button turns into `↪ Jump`)
+- Alt-click `▶ Resume` to open the workspace in the background and stay on the list
+- Sessions that look active (modified in the last 2 minutes) ask for a second click before resuming, since resuming a live session forks it
+- Without cmux, the `📋 Copy` button still gives you a ready-to-paste `cd … && claude --resume …` command
+
+Notes:
+
+- cmux's socket only accepts callers inside the cmux process tree, so run `npx ccakashic` from a terminal **inside cmux** (or configure a socket password in cmux settings and export `CMUX_SOCKET_PASSWORD`)
+- Disable the integration with `--no-cmux` or `CCAKASHIC_NO_CMUX=1`
 
 ## Options
 
 ```bash
 # Custom port (default: 3333)
 CCAKASHIC_PORT=3000 npx ccakashic
+
+# Skip cmux detection (regular browser, no resume buttons)
+npx ccakashic --no-cmux
 ```
 
 ## Requirements

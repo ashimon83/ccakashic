@@ -3,11 +3,24 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as crypto from 'crypto';
 import { exec } from 'child_process';
-import { listProjects, listSessions, findSessionForCwd } from '../discover';
+import { listProjects, listSessions, findSessionForCwd, readCwdFromSession } from '../discover';
 import { parseSession } from '../parser';
 import { generate } from '../html-generator';
 import { generateIndex, generateSessionList } from '../pages';
+import type { ResumeContext } from '../resume-ui';
+import {
+  isCmuxAvailable,
+  listWorkspaceIds,
+  loadResumeMap,
+  saveResumeMapEntry,
+  findLiveWorkspaceForSession,
+  selectWorkspace,
+  resumeInNewWorkspace,
+  buildResumeCommand,
+  openInCmuxBrowser,
+} from '../cmux';
 // Published at dist/bin/ccakashic.js, so ../../package.json resolves from dist/
 import * as pkg from '../../package.json';
 
@@ -18,9 +31,125 @@ function openInBrowser(url: string): void {
   exec(`${cmd} "${url}"`);
 }
 
+async function openUrl(url: string): Promise<void> {
+  if (!NO_CMUX && await isCmuxAvailable()) {
+    try {
+      await openInCmuxBrowser(url);
+      console.log('Opened in cmux browser pane (use --no-cmux for a regular browser)');
+      return;
+    } catch {
+      // cmux is up but the browser pane failed; use the regular browser
+    }
+  }
+  openInBrowser(url);
+}
+
 const PORT = parseInt(process.env.CCAKASHIC_PORT || '') || 3333;
 const MAX_PORT_TRIES = 20;
 const LOCK_FILE = path.join(os.tmpdir(), `ccakashic-${os.userInfo().username || 'user'}.json`);
+const NO_CMUX = process.argv.includes('--no-cmux') || !!process.env.CCAKASHIC_NO_CMUX;
+
+// CSRF guard for /api/resume: any webpage can POST to localhost, but only
+// pages we served know this token.
+const RESUME_TOKEN = crypto.randomBytes(16).toString('hex');
+
+async function buildResumeContext(): Promise<ResumeContext | undefined> {
+  if (NO_CMUX) return undefined;
+  const cmuxAvailable = await isCmuxAvailable();
+  const openSessionIds = new Set<string>();
+  if (cmuxAvailable) {
+    try {
+      const live = await listWorkspaceIds();
+      const map = loadResumeMap();
+      for (const [sessionId, wsId] of Object.entries(map)) {
+        if (live.has(wsId.toUpperCase())) openSessionIds.add(sessionId);
+      }
+    } catch {
+      // liveness markers are cosmetic; resume still works without them
+    }
+  }
+  return { token: RESUME_TOKEN, cmuxAvailable, openSessionIds };
+}
+
+function readJsonBody(req: http.IncomingMessage): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let data = '';
+    req.on('data', (chunk) => {
+      data += chunk;
+      if (data.length > 64 * 1024) {
+        reject(new Error('Body too large'));
+        req.destroy();
+      }
+    });
+    req.on('end', () => {
+      try { resolve(JSON.parse(data)); } catch { reject(new Error('Invalid JSON')); }
+    });
+    req.on('error', reject);
+  });
+}
+
+async function handleResume(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+  const respond = (status: number, body: object) => {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+  };
+
+  if (req.method !== 'POST') return respond(405, { action: 'error', message: 'POST only' });
+  if (req.headers['x-ccakashic-token'] !== RESUME_TOKEN) {
+    return respond(403, { action: 'error', message: 'Invalid token' });
+  }
+
+  let body: any;
+  try {
+    body = await readJsonBody(req);
+  } catch (err: any) {
+    return respond(400, { action: 'error', message: err?.message || 'Bad request' });
+  }
+  const { project: rawName, session: sessionId, mode } = body || {};
+  if (typeof rawName !== 'string' || typeof sessionId !== 'string') {
+    return respond(400, { action: 'error', message: 'project and session are required' });
+  }
+
+  const projects = await listProjects();
+  const project = projects.find((p) => p.rawName === rawName);
+  const sessionPath = project ? path.join(project.dir, `${sessionId}.jsonl`) : null;
+  if (!project || !sessionPath || !fs.existsSync(sessionPath)) {
+    return respond(404, { action: 'error', message: 'Session not found' });
+  }
+
+  // Already open via a previous resume → jump instead of forking.
+  const liveWorkspace = await findLiveWorkspaceForSession(sessionId);
+  if (liveWorkspace) {
+    try {
+      await selectWorkspace(liveWorkspace);
+      return respond(200, { action: 'jumped', workspace: liveWorkspace });
+    } catch {
+      // workspace died between the check and the select; fall through
+    }
+  }
+
+  const cwd = await readCwdFromSession(sessionPath);
+  if (!cwd) return respond(200, { action: 'error', message: 'No cwd recorded in this session' });
+  if (!fs.existsSync(cwd)) {
+    return respond(200, { action: 'error', message: `Directory no longer exists: ${cwd}` });
+  }
+
+  if (NO_CMUX || !(await isCmuxAvailable())) {
+    return respond(200, { action: 'unavailable', command: buildResumeCommand(cwd, sessionId) });
+  }
+
+  const sessions = await listSessions(project.dir);
+  const preview = sessions.find((s) => s.id === sessionId);
+  const title = preview?.customTitle || preview?.aiTitle || preview?.slug || sessionId.slice(0, 8);
+
+  try {
+    const result = await resumeInNewWorkspace(cwd, sessionId, title, mode === 'background');
+    saveResumeMapEntry(sessionId, result.workspaceId);
+    return respond(200, { action: 'resumed', workspace: result.workspaceId });
+  } catch (err: any) {
+    return respond(200, { action: 'error', message: `cmux error: ${err?.message || err}` });
+  }
+}
 
 const server = http.createServer(async (req, res) => {
   try {
@@ -30,6 +159,11 @@ const server = http.createServer(async (req, res) => {
     if (pathname === '/__ccakashic') {
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ name: 'ccakashic', version: pkg.version }));
+      return;
+    }
+
+    if (pathname === '/api/resume') {
+      await handleResume(req, res);
       return;
     }
 
@@ -52,7 +186,7 @@ const server = http.createServer(async (req, res) => {
       }
       const sessions = await listSessions(project.dir);
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(generateSessionList(project, sessions));
+      res.end(generateSessionList(project, sessions, await buildResumeContext()));
       return;
     }
 
@@ -76,7 +210,13 @@ const server = http.createServer(async (req, res) => {
       const sessions = await listSessions(project.dir);
       const session = sessions.find((s) => s.id === sessionId) || { id: sessionId, path: sessionPath };
       const parsed = await parseSession(sessionPath);
-      const html = generate(parsed, { projectName: project.name, session, backUrl: `/project/${encodeURIComponent(rawName)}` });
+      const html = generate(parsed, {
+        projectName: project.name,
+        projectRawName: rawName,
+        session,
+        backUrl: `/project/${encodeURIComponent(rawName)}`,
+        resume: await buildResumeContext(),
+      });
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
       res.end(html);
       return;
@@ -188,7 +328,7 @@ async function main() {
     const url = `http://127.0.0.1:${existing}`;
     console.log(`Reusing existing ccakashic at ${url}`);
     writeLockFile(existing);
-    openInBrowser(await buildOpenUrl(url));
+    await openUrl(await buildOpenUrl(url));
     return;
   }
 
@@ -198,7 +338,7 @@ async function main() {
     const url = `http://127.0.0.1:${port}`;
     console.log(`Reusing existing ccakashic at ${url}`);
     writeLockFile(port);
-    openInBrowser(await buildOpenUrl(url));
+    await openUrl(await buildOpenUrl(url));
     return;
   }
 
@@ -213,7 +353,7 @@ async function main() {
   process.on('SIGTERM', cleanup);
   process.on('exit', cleanupLockFile);
 
-  openInBrowser(await buildOpenUrl(url));
+  await openUrl(await buildOpenUrl(url));
 }
 
 main().catch((err) => {

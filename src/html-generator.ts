@@ -1,6 +1,7 @@
 import { getCSS, getAppJS } from './template-assets';
 import type { Message, ParsedSession, UsageStats } from './parser';
 import type { SessionPreview } from './discover';
+import { resumeButtonsHtml, resumeCSS, resumeJS, type ResumeContext } from './resume-ui';
 
 function escapeHtml(str: unknown): string {
   return String(str)
@@ -326,12 +327,17 @@ function renderStats(stats: UsageStats | null | undefined): string {
 
 export interface GenerateOptions {
   projectName?: string;
+  projectRawName?: string;
   session?: Partial<SessionPreview> & { slug?: string | null };
   backUrl?: string;
+  resume?: ResumeContext;
 }
 
 export function generate(parsed: ParsedSession, options: GenerateOptions = {}): string {
-  const { projectName, session, backUrl } = options;
+  const { projectName, projectRawName, session, backUrl, resume } = options;
+  const resumeButtons = session?.id && projectRawName
+    ? resumeButtonsHtml(projectRawName, { id: session.id, cwd: session.cwd ?? null, lastModified: session.lastModified ?? 0 }, resume)
+    : '';
   const title = session?.customTitle || session?.aiTitle || session?.slug || session?.id || 'Session';
   const date = session?.timestamp
     ? new Date(session.timestamp).toLocaleDateString('en-CA')
@@ -368,6 +374,7 @@ export function generate(parsed: ParsedSession, options: GenerateOptions = {}): 
 <title>${escapeHtml(title)} — ${escapeHtml(date)}</title>
 <style>${getCSS()}
 ${detailLayoutCSS()}
+${resumeCSS()}
 </style>
 </head>
 <body>
@@ -382,6 +389,7 @@ ${detailLayoutCSS()}
     ${session?.gitBranch ? `<span class="meta-item">Branch: ${escapeHtml(session.gitBranch)}</span>` : ''}
     ${session?.model ? `<span class="meta-item">Model: ${escapeHtml(session.model)}</span>` : ''}
   </div>
+  ${resumeButtons}
   ${renderStats(parsed.stats)}
 </header>
 <div class="detail-layout">
@@ -403,6 +411,7 @@ ${detailLayoutCSS()}
 </div>
 <script>${getAppJS()}
 ${detailNavJS()}
+${resumeJS(resume)}
 </script>
 </body>
 </html>`;

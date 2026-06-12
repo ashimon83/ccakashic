@@ -16,6 +16,7 @@ export interface Project {
 export interface SessionPreview {
   id: string;
   path: string;
+  cwd: string | null;
   timestamp: string | null;
   lastModified: number;
   preview: string;
@@ -92,6 +93,7 @@ async function getSessionPreview(filePath: string): Promise<SessionPreview> {
     const result: SessionPreview = {
       id: path.basename(filePath, '.jsonl'),
       path: filePath,
+      cwd: null,
       timestamp: null,
       lastModified: fs.statSync(filePath).mtimeMs,
       preview: '',
@@ -123,6 +125,9 @@ async function getSessionPreview(filePath: string): Promise<SessionPreview> {
 
         if (!result.timestamp && obj.timestamp) {
           result.timestamp = obj.timestamp;
+        }
+        if (!result.cwd && obj.cwd) {
+          result.cwd = obj.cwd;
         }
         if (!result.gitBranch && obj.gitBranch) {
           result.gitBranch = obj.gitBranch;
@@ -190,7 +195,7 @@ export async function listSessions(projectDir: string): Promise<SessionPreview[]
   return sessions;
 }
 
-function readCwdFromSession(filePath: string): Promise<string | null> {
+export function readCwdFromSession(filePath: string): Promise<string | null> {
   return new Promise((resolve) => {
     const rl = readline.createInterface({
       input: fs.createReadStream(filePath, { encoding: 'utf-8' }),
