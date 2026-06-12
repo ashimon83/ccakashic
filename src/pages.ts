@@ -1,5 +1,6 @@
 import { getCSS } from './template-assets';
 import type { Project, SessionPreview } from './discover';
+import { resumeButtonsHtml, resumeCSS, resumeJS, type ResumeContext } from './resume-ui';
 
 function escapeHtml(str: unknown): string {
   return String(str)
@@ -36,6 +37,7 @@ function pageShell(title: string, bodyHtml: string): string {
 <title>${escapeHtml(title)}</title>
 <style>${getCSS()}
 ${indexCSS()}
+${resumeCSS()}
 </style>
 </head>
 <body>
@@ -297,7 +299,7 @@ function formatTimeOnly(ts: string | number | Date | null | undefined): string {
   return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
-export function generateSessionList(project: Project, sessions: SessionPreview[]): string {
+export function generateSessionList(project: Project, sessions: SessionPreview[], resume?: ResumeContext): string {
   const dateGroups: { date: string; sessions: SessionPreview[] }[] = [];
   let currentDate: string | null = null;
   for (const s of sessions) {
@@ -345,6 +347,7 @@ export function generateSessionList(project: Project, sessions: SessionPreview[]
       return `<a class="list-item" href="${href}">
   ${titleRow}
   ${preview}
+  ${resumeButtonsHtml(project.rawName, s, resume)}
 </a>`;
     }).join('\n');
 
@@ -414,6 +417,7 @@ export function generateSessionList(project: Project, sessions: SessionPreview[]
   window.addEventListener('scroll', updateCurrentDate, { passive: true });
   updateCurrentDate();
 })();
+${resumeJS(resume)}
 </script>`);
 }
 
