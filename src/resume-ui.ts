@@ -104,9 +104,9 @@ export function resumeJS(ctx: ResumeContext | undefined): string {
     clearTimeout(toastEl._t);
     toastEl._t = setTimeout(function() { toastEl.classList.remove('visible'); }, 2500);
   }
-  function copy(text) {
+  function copy(text, okMsg) {
     navigator.clipboard.writeText(text).then(
-      function() { toast('Command copied'); },
+      function() { toast(okMsg || 'Command copied'); },
       function() { toast('Copy failed'); }
     );
   }
@@ -149,7 +149,7 @@ export function resumeJS(ctx: ResumeContext | undefined): string {
         btn.classList.add('is-open');
         btn.innerHTML = '&#8618; Jump';
       } else if (data.action === 'unavailable' && data.command) {
-        copy(data.command);
+        copy(data.command, data.message);
       } else {
         toast(data.message || 'Resume failed');
       }

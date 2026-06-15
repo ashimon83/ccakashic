@@ -42,20 +42,26 @@ function run(args: string[], timeoutMs = 5000): Promise<string> {
   });
 }
 
-let cachedAvailable: { value: boolean; at: number } | null = null;
+let everAvailable = false;
+let cachedUnavailableAt = 0;
 
 export async function isCmuxAvailable(): Promise<boolean> {
-  // ping spawns a process; cache briefly so page renders stay cheap
-  if (cachedAvailable && Date.now() - cachedAvailable.at < 10_000) {
-    return cachedAvailable.value;
-  }
+  // Sticky-positive: once cmux has answered, keep reporting available for the
+  // life of the process. A long-running server can transiently lose contact
+  // with cmux (Mac sleep/wake, cmux app restart) and `ping` then fails — but we
+  // must NOT hide the Resume UI on such a blip. The buttons stay; if cmux is
+  // genuinely unreachable at click time, /api/resume degrades to the copy
+  // command. Negative results are cached only ~5s so first contact is quick.
+  if (everAvailable) return true;
+  if (cachedUnavailableAt && Date.now() - cachedUnavailableAt < 5_000) return false;
   let value = false;
   try {
-    value = (await run(['ping'], 1500)) === 'PONG';
+    value = (await run(['ping'], 2500)) === 'PONG';
   } catch {
     value = false;
   }
-  cachedAvailable = { value, at: Date.now() };
+  if (value) everAvailable = true;
+  else cachedUnavailableAt = Date.now();
   return value;
 }
 

@@ -154,37 +154,43 @@ async function handleResume(req: http.IncomingMessage, res: http.ServerResponse)
     return respond(404, { action: 'error', message: 'Session not found' });
   }
 
-  // Already open via a previous resume → jump instead of forking.
-  const liveWorkspace = await findLiveWorkspaceForSession(sessionId);
-  if (liveWorkspace) {
-    try {
-      await selectWorkspace(liveWorkspace);
-      return respond(200, { action: 'jumped', workspace: liveWorkspace });
-    } catch {
-      // workspace died between the check and the select; fall through
-    }
-  }
-
   const cwd = await readCwdFromSession(sessionPath);
   if (!cwd) return respond(200, { action: 'error', message: 'No cwd recorded in this session' });
   if (!fs.existsSync(cwd)) {
     return respond(200, { action: 'error', message: `Directory no longer exists: ${cwd}` });
   }
 
-  if (NO_CMUX || !(await isCmuxAvailable())) {
-    return respond(200, { action: 'unavailable', command: buildResumeCommand(cwd, sessionId) });
+  const command = buildResumeCommand(cwd, sessionId);
+  if (NO_CMUX) {
+    return respond(200, { action: 'unavailable', command });
   }
 
-  const sessions = await listSessions(project.dir);
-  const preview = sessions.find((s) => s.id === sessionId);
-  const title = preview?.customTitle || preview?.aiTitle || preview?.slug || sessionId.slice(0, 8);
-
+  // Any cmux call can fail if the long-running server has lost contact with the
+  // current cmux instance (Mac sleep/wake, cmux restart). Rather than surface a
+  // hard error or hide the button, fall back to handing back the copy command
+  // with a hint to restart ccakashic if it persists.
   try {
+    // Already open via a previous resume → jump instead of forking.
+    const liveWorkspace = await findLiveWorkspaceForSession(sessionId);
+    if (liveWorkspace) {
+      await selectWorkspace(liveWorkspace);
+      return respond(200, { action: 'jumped', workspace: liveWorkspace });
+    }
+
+    const sessions = await listSessions(project.dir);
+    const preview = sessions.find((s) => s.id === sessionId);
+    const title = preview?.customTitle || preview?.aiTitle || preview?.slug || sessionId.slice(0, 8);
+
     const result = await resumeInNewWorkspace(cwd, sessionId, title, mode === 'background');
     saveResumeMapEntry(sessionId, result.workspaceId);
     return respond(200, { action: 'resumed', workspace: result.workspaceId });
   } catch (err: any) {
-    return respond(200, { action: 'error', message: `cmux error: ${err?.message || err}` });
+    if (process.env.CCAKASHIC_DEBUG) console.error('[resume] cmux failed:', err?.message || err);
+    return respond(200, {
+      action: 'unavailable',
+      command,
+      message: 'cmux unreachable — copied the command instead. If this persists, restart ccakashic.',
+    });
   }
 }
 
