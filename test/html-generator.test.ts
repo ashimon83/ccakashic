@@ -15,7 +15,7 @@ function parsed(messages: any[] = []): any {
 describe('message filters', () => {
   it('renders a chip per filter, all enabled by default', () => {
     const html = generate(parsed());
-    for (const key of ['tools', 'thinking', 'shell', 'system', 'cost']) {
+    for (const key of ['tools', 'injected', 'thinking', 'shell', 'system', 'cost']) {
       expect(html).toContain(`data-filter="${key}" checked`);
     }
     expect(html).toContain('data-preset="chat"');
@@ -25,6 +25,7 @@ describe('message filters', () => {
   it('hides each filtered type through a body class', () => {
     const html = generate(parsed());
     expect(html).toContain('body.hide-tools .msg-tool');
+    expect(html).toContain('body.hide-injected .msg-injected');
     expect(html).toContain('body.hide-thinking .msg-thinking');
     expect(html).toContain('body.hide-shell .msg-local-cmd');
     expect(html).toContain('body.hide-system .msg-system');
@@ -45,6 +46,23 @@ describe('message filters', () => {
     expect(renderMessage({ type: 'system', subtype: 'info', content: 'hi', timestamp: TS })).toContain('msg-system');
     expect(renderMessage({ type: 'user', text: 'hello', timestamp: TS })).toContain('msg-user');
     expect(renderMessage({ type: 'assistant', text: 'hi', timestamp: TS })).toContain('msg-assistant');
+  });
+
+  it('separates harness-injected user-role text from the user bubble', () => {
+    const injected = renderMessage({
+      type: 'user', text: 'Stop hook feedback: keep going', timestamp: TS,
+      injected: true, injectedKind: 'Hook feedback',
+    });
+    expect(injected).toContain('msg-injected');
+    expect(injected).not.toContain('msg-user');
+    expect(injected).toContain('Hook feedback');
+    // collapsed, with the opening of the text as the summary
+    expect(injected).toContain('<details>');
+    expect(injected).toContain('injected-peek');
+
+    const real = renderMessage({ type: 'user', text: 'hello', timestamp: TS, injected: false, injectedKind: null });
+    expect(real).toContain('msg-user');
+    expect(real).not.toContain('msg-injected');
   });
 
   it('puts cost badges in filterable wrappers', () => {
