@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import * as path from 'path';
-import { parseSession } from '../src/parser';
+import { parseSession, classifyUserText } from '../src/parser';
 
 const FIXTURE = path.join(__dirname, 'fixtures', 'simple-session.jsonl');
 
@@ -54,5 +54,45 @@ describe('parseSession', () => {
       (m) => m.type === 'permission-mode' || m.type === 'file-history-snapshot',
     );
     expect(bogus).toHaveLength(0);
+  });
+});
+
+describe('classifyUserText', () => {
+  const typed = (text: string, line: any = {}) => classifyUserText(text, line);
+
+  it('treats a plain typed prompt as the user talking', () => {
+    expect(typed('直してください', { promptSource: 'typed' })).toBeNull();
+    expect(typed('こうしたい', { promptSource: 'queued' })).toBeNull();
+  });
+
+  it('treats unflagged legacy lines as typed rather than hiding them', () => {
+    // Sessions from older Claude Code versions carry no promptSource at all.
+    expect(typed('昔のセッションの入力')).toBeNull();
+  });
+
+  it('labels harness-injected user-role text', () => {
+    expect(typed('Stop hook feedback: keep going', { isMeta: true })).toBe('Hook feedback');
+    expect(typed('Base directory for this skill: /x', { isMeta: true })).toBe('Skill');
+    expect(typed('Another Claude session sent a message: hi', { isMeta: true })).toBe('Agent message');
+    expect(typed('[Request interrupted by user for tool use]')).toBe('Interrupted');
+    expect(typed('Continue from where you left off.', { isMeta: true })).toBe('Continuation');
+    expect(typed('preamble\n<task-notification>\ndone\n</task-notification>')).toBe('Task notification');
+    expect(typed('...summary...', { isCompactSummary: true })).toBe('Compact summary');
+    expect(typed('You are a senior security engineer', { isMeta: true })).toBe('Injected');
+    expect(typed('run this', { promptSource: 'sdk' })).toBe('Injected');
+  });
+
+  it('anchors the labelled prefixes so quoting one does not misfile it', () => {
+    expect(typed('なんで Stop hook feedback: が出るの？', { promptSource: 'typed' })).toBeNull();
+  });
+});
+
+describe('parseSession injected flag', () => {
+  it('marks injected user lines while keeping them user-typed turns', async () => {
+    const parsed = await parseSession(FIXTURE);
+    for (const m of parsed.messages.filter((x) => x.type === 'user')) {
+      expect(m).toHaveProperty('injected');
+      expect(m.injected).toBe(m.injectedKind !== null);
+    }
   });
 });

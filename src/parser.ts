@@ -203,6 +203,36 @@ function parseLocalCommand(text: string) {
   return null;
 }
 
+// A `user` line in the JSONL is not necessarily something the user typed:
+// Claude Code also feeds hook output, skill bodies, task notifications and
+// compaction summaries to the model in the user role. Those read like
+// instructions to the assistant, so they get their own presentation instead of
+// sharing the bubble with what was actually typed. Ordered — the first match
+// wins, and the labelled prefixes are anchored so a message that merely quotes
+// one is not misfiled.
+const INJECTED_PREFIXES: [RegExp, string][] = [
+  [/^Stop hook feedback:/, 'Hook feedback'],
+  [/^Base directory for this skill:/, 'Skill'],
+  [/^Another Claude session sent a message:/, 'Agent message'],
+  [/^\[Request interrupted by user/, 'Interrupted'],
+  [/^\[Your previous response had no visible output/, 'Continuation'],
+  [/^Continue from where you left off\./, 'Continuation'],
+];
+
+// Returns a label when the text was injected on the user's behalf, or null
+// when it is genuinely typed. Legacy sessions carry no promptSource at all, so
+// "no flags" has to mean typed — never hide a real prompt.
+export function classifyUserText(text: string, line: RawLine): string | null {
+  if (line.isCompactSummary) return 'Compact summary';
+  if (text.includes('<task-notification>')) return 'Task notification';
+  for (const [re, label] of INJECTED_PREFIXES) {
+    if (re.test(text)) return label;
+  }
+  if (line.isMeta) return 'Injected';
+  if (line.promptSource === 'sdk' || line.promptSource === 'system') return 'Injected';
+  return null;
+}
+
 function processUserText(text: string, line: RawLine, messages: Message[]): void {
   if (text.match(/^<local-command-caveat>/)) {
     return;
@@ -245,11 +275,16 @@ function processUserText(text: string, line: RawLine, messages: Message[]): void
     .trim();
 
   if (stripped) {
+    // Stays type 'user' so it still opens a turn for turn-usage accounting;
+    // only the presentation differs.
+    const injectedKind = classifyUserText(stripped, line);
     messages.push({
       type: 'user',
       text: stripped,
       timestamp: line.timestamp,
       uuid: line.uuid,
+      injected: injectedKind !== null,
+      injectedKind,
     });
   }
 }

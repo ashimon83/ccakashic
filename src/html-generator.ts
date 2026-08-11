@@ -115,6 +115,11 @@ function renderDiff(patches: any[]): string {
   return lines.join('\n');
 }
 
+function firstLine(text: string, max: number): string {
+  const flat = (text || '').replace(/\s+/g, ' ').trim();
+  return flat.length > max ? flat.slice(0, max) + '…' : flat;
+}
+
 function msgId(ts: string | number | Date | null | undefined): string {
   if (!ts) return `msg-${Date.now()}${Math.random().toString(36).slice(2, 5)}`;
   const d = new Date(ts);
@@ -156,6 +161,14 @@ export function renderMessage(msg: any): string {
 
   switch (msg.type) {
     case 'user':
+      // Text the harness injected in the user role (hook output, skill bodies,
+      // task notifications, …) is not part of the conversation, so it gets a
+      // collapsed row instead of the user's bubble.
+      if (msg.injected) {
+        const label = escapeHtml(msg.injectedKind || 'Injected');
+        const peek = escapeHtml(firstLine(msg.text, 120));
+        return `<div class="msg msg-injected" id="${id}"><details><summary>${time}<span class="injected-label">${label}</span><span class="injected-peek">${peek}</span></summary><div class="injected-body" data-markdown>${escapeHtml(msg.text)}</div></details>${turnBadge ? `<div class="tool-usage-row">${turnBadge}</div>` : ''}</div>`;
+      }
       return `<div class="msg msg-user" id="${id}">${time}<div class="msg-content" data-markdown>${escapeHtml(msg.text)}</div>${turnBadge}</div>`;
 
     case 'assistant':
@@ -324,6 +337,7 @@ function renderStats(stats: UsageStats | null | undefined): string {
 // persisted client-side (localStorage) so they survive navigation.
 const MESSAGE_FILTERS: { key: string; label: string; title: string }[] = [
   { key: 'tools', label: 'Tools', title: 'Tool calls, their output, and inlined subagent conversations' },
+  { key: 'injected', label: 'Injected', title: 'Text fed to the model in the user role: hook output, skill bodies, task notifications, compaction summaries' },
   { key: 'thinking', label: 'Thinking', title: 'Thinking indicators' },
   { key: 'shell', label: 'Shell', title: 'Local ! commands and their output' },
   { key: 'system', label: 'System', title: 'System messages' },
@@ -547,7 +561,67 @@ function detailLayoutCSS(): string {
   background: var(--bg-secondary);
 }
 
+/* Injected user-role text (hook output, skill bodies, notifications). Kept
+   full width and visually apart from the user's own bubble, and collapsed —
+   these run long and are read only when something looks off. */
+.msg-injected {
+  align-self: center;
+  width: 100%;
+  max-width: 92%;
+  padding: 0;
+  background: var(--tool-bg);
+  border: 1px dashed var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.msg-injected summary {
+  padding: 8px 14px;
+  cursor: pointer;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  user-select: none;
+  list-style: none;
+  transition: background 0.15s;
+}
+.msg-injected summary::-webkit-details-marker { display: none; }
+.msg-injected summary::before {
+  content: '\\25B6';
+  font-size: 0.6rem;
+  transition: transform 0.2s;
+  flex-shrink: 0;
+}
+.msg-injected details[open] > summary::before { transform: rotate(90deg); }
+.msg-injected summary:hover { background: var(--bg-secondary); }
+.msg-injected .timestamp { flex-shrink: 0; margin-bottom: 0; }
+.injected-label {
+  flex-shrink: 0;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  font-size: 0.68rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.injected-peek {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.8;
+}
+.injected-body {
+  border-top: 1px dashed var(--border);
+  padding: 12px 14px;
+  font-size: 0.85rem;
+  color: var(--text-muted);
+}
+
 /* What each filter hides. User and assistant messages are never touched. */
+body.hide-injected .msg-injected,
 body.hide-tools .msg-tool,
 body.hide-thinking .msg-thinking,
 body.hide-shell .msg-local-cmd,
@@ -751,6 +825,7 @@ function messageFilterJS(): string {
   // empties a date group.
   const hideSelectors = JSON.stringify({
     tools: '.msg-tool',
+    injected: '.msg-injected',
     thinking: '.msg-thinking',
     shell: '.msg-local-cmd',
     system: '.msg-system',
