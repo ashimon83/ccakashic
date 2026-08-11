@@ -318,6 +318,30 @@ function renderStats(stats: UsageStats | null | undefined): string {
   return `<div class="stats-bar">${items.join('')}</div>`;
 }
 
+// Toggles for the noisier parts of a thread. The chat itself (user +
+// assistant) is never filtered — these only hide the surrounding machinery, so
+// a reader who mostly wants the conversation can strip it down. Choices are
+// persisted client-side (localStorage) so they survive navigation.
+const MESSAGE_FILTERS: { key: string; label: string; title: string }[] = [
+  { key: 'tools', label: 'Tools', title: 'Tool calls, their output, and inlined subagent conversations' },
+  { key: 'thinking', label: 'Thinking', title: 'Thinking indicators' },
+  { key: 'shell', label: 'Shell', title: 'Local ! commands and their output' },
+  { key: 'system', label: 'System', title: 'System messages' },
+  { key: 'cost', label: 'Cost', title: 'Token and cost badges' },
+];
+
+function filterBarHtml(): string {
+  const chips = MESSAGE_FILTERS.map(f =>
+    `<label class="filter-chip" title="${escapeHtml(f.title)}"><input type="checkbox" data-filter="${f.key}" checked>${escapeHtml(f.label)}</label>`
+  ).join('');
+  return `<div class="detail-filters" id="detailFilters">
+  <span class="detail-filters-label">Show</span>
+  ${chips}
+  <button type="button" class="filter-preset-btn" data-preset="chat" title="Hide everything except the conversation">Chat only</button>
+  <button type="button" class="filter-preset-btn" data-preset="all" title="Show everything">Show all</button>
+</div>`;
+}
+
 export interface GenerateOptions {
   projectName?: string;
   projectRawName?: string;
@@ -356,7 +380,7 @@ export function generate(parsed: ParsedSession, options: GenerateOptions = {}): 
     ).join('\n');
 
   const backLink = backUrl
-    ? `<div style="font-size:0.8rem;margin-bottom:8px"><a href="${escapeHtml(backUrl)}" style="color:var(--link);text-decoration:none">&larr; Back to sessions</a> &nbsp;|&nbsp; <a href="/" style="color:var(--link);text-decoration:none">Dashboard</a> &nbsp;|&nbsp; <a href="/projects" style="color:var(--link);text-decoration:none">All projects</a></div>`
+    ? `<div class="detail-backlink"><a href="${escapeHtml(backUrl)}">&larr; Back to sessions</a> &nbsp;|&nbsp; <a href="/">Dashboard</a> &nbsp;|&nbsp; <a href="/projects">All projects</a></div>`
     : '';
 
   return `<!DOCTYPE html>
@@ -372,7 +396,7 @@ ${resumeCSS()}
 </head>
 <body>
 <a href="https://github.com/ashimon83/ccakashic" class="github-corner" aria-label="View source on GitHub" target="_blank" rel="noopener"><svg width="70" height="70" viewBox="0 0 250 250" aria-hidden="true"><path d="M0,0 L115,115 L130,115 L142,142 L250,250 L250,0 Z"></path><path d="M128.3,109.0 C113.8,99.7 119.0,89.6 119.0,89.6 C122.0,82.7 120.5,78.6 120.5,78.6 C119.2,72.0 123.4,76.3 123.4,76.3 C127.3,80.9 125.5,87.3 125.5,87.3 C122.9,97.6 130.6,101.9 134.4,103.2" fill="currentColor" style="transform-origin: 130px 106px;" class="octo-arm"></path><path d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.8,137.7 141.6,141.9 141.8,141.8 Z" fill="currentColor" class="octo-body"></path></svg></a>
-<div class="detail-sticky-bar" id="detailStickyBar"></div>
+<div class="session-header-bar" id="sessionHeaderBar">
 <header class="session-header">
   ${backLink}
   <h1>${escapeHtml(title)}</h1>
@@ -384,7 +408,9 @@ ${resumeCSS()}
   </div>
   ${resumeButtons}
   ${renderStats(parsed.stats)}
+  ${filterBarHtml()}
 </header>
+</div>
 <div class="detail-layout">
   <nav class="detail-sidenav" id="detailSidenav">
     <div class="detail-sidenav-title">Dates</div>
@@ -404,6 +430,7 @@ ${resumeCSS()}
 </div>
 <script>${getAppJS()}
 ${detailNavJS()}
+${messageFilterJS()}
 ${resumeJS(resume)}
 </script>
 </body>
@@ -412,6 +439,132 @@ ${resumeJS(resume)}
 
 function detailLayoutCSS(): string {
   return `
+/* Sticky session header. The bar spans the full width (so nothing scrolls
+   past it at the edges) while the header inside keeps its centred column.
+   --header-h is kept in sync by JS and is what the date headings, the side
+   nav and anchor scrolling offset themselves against. */
+.session-header-bar {
+  position: sticky;
+  top: 0;
+  z-index: 120;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+.session-header-bar .session-header {
+  border-bottom: none;
+  padding: 20px 16px 12px;
+}
+/* Past the first scroll the header sheds its bulkier rows so it stays a thin
+   strip; the title, meta, resume buttons and filters remain reachable. */
+.session-header-bar.is-condensed {
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.14);
+}
+.session-header-bar.is-condensed .session-header {
+  padding: 6px 16px 8px;
+}
+.session-header-bar.is-condensed .detail-backlink,
+.session-header-bar.is-condensed .stats-bar {
+  display: none;
+}
+.session-header-bar.is-condensed h1 {
+  font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-header-bar.is-condensed .session-meta {
+  margin-top: 2px;
+  font-size: 0.75rem;
+  gap: 12px;
+}
+.session-header-bar.is-condensed .resume-actions,
+.session-header-bar.is-condensed .detail-filters {
+  margin-top: 6px;
+}
+
+.detail-backlink {
+  font-size: 0.8rem;
+  margin-bottom: 8px;
+}
+.detail-backlink a {
+  color: var(--link);
+  text-decoration: none;
+}
+.detail-backlink a:hover { text-decoration: underline; }
+
+/* Message-type filters */
+.detail-filters {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  margin-top: 10px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.detail-filters-label {
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 600;
+  font-size: 0.65rem;
+}
+.filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 2px 10px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-secondary);
+  color: var(--text);
+  cursor: pointer;
+  user-select: none;
+  transition: border-color 0.15s, opacity 0.15s;
+}
+.filter-chip:hover { border-color: var(--link); }
+.filter-chip input {
+  margin: 0;
+  cursor: pointer;
+  accent-color: var(--link);
+}
+.filter-chip:has(input:not(:checked)) {
+  opacity: 0.5;
+  text-decoration: line-through;
+}
+.filter-preset-btn {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--tool-bg);
+  color: var(--text);
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.filter-preset-btn:hover {
+  border-color: var(--link);
+  background: var(--bg-secondary);
+}
+
+/* What each filter hides. User and assistant messages are never touched. */
+body.hide-tools .msg-tool,
+body.hide-thinking .msg-thinking,
+body.hide-shell .msg-local-cmd,
+body.hide-system .msg-system {
+  display: none;
+}
+body.hide-cost .turn-usage,
+body.hide-cost .item-usage,
+body.hide-cost .tool-usage-row {
+  display: none;
+}
+
+/* Anchors (timestamp links, date jumps) must clear the sticky header. */
+.msg, .detail-date-group {
+  scroll-margin-top: calc(var(--header-h, 60px) + 44px);
+}
+
 .detail-layout {
   display: flex;
   max-width: 1100px;
@@ -477,9 +630,9 @@ function detailLayoutCSS(): string {
   width: 140px;
   flex-shrink: 0;
   position: sticky;
-  top: 48px;
+  top: calc(var(--header-h, 60px) + 8px);
   align-self: flex-start;
-  max-height: calc(100vh - 60px);
+  max-height: calc(100vh - var(--header-h, 60px) - 20px);
   overflow-y: auto;
   padding: 16px 8px 16px 16px;
   border-right: 1px solid var(--border);
@@ -526,7 +679,7 @@ function detailLayoutCSS(): string {
   border-bottom: 2px solid var(--border);
   margin-bottom: 12px;
   position: sticky;
-  top: 44px;
+  top: var(--header-h, 60px);
   background: var(--bg);
   z-index: 5;
 }
@@ -537,29 +690,12 @@ function detailLayoutCSS(): string {
   gap: 28px;
 }
 
-/* Sticky date bar */
-.detail-sticky-bar {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
-  z-index: 100;
-  background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
-  padding: 8px 24px;
-  font-size: 0.85rem;
-  font-weight: 700;
-  color: var(--text);
-  transform: translateY(-100%);
-  transition: transform 0.2s;
-}
-.detail-sticky-bar.visible {
-  transform: translateY(0);
-}
-
 @media (max-width: 768px) {
   .detail-sidenav { display: none; }
   .detail-layout { display: block; }
+  /* On a phone the condensed header is competing with the thread for height;
+     the meta row wraps to two lines, so drop it and keep title + filters. */
+  .session-header-bar.is-condensed .session-meta { display: none; }
 }
 `;
 }
@@ -567,24 +703,38 @@ function detailLayoutCSS(): string {
 function detailNavJS(): string {
   return `
 (function() {
+  var bar = document.getElementById('sessionHeaderBar');
   var groups = Array.from(document.querySelectorAll('.detail-date-group'));
-  var bar = document.getElementById('detailStickyBar');
-  var navItems = Array.from(document.querySelectorAll('.detail-sidenav-item'));
-  if (!groups.length) return;
+  var navItems = Array.from(document.querySelectorAll('.detail-sidenav-item[data-date]'));
+
+  // Everything that has to clear the sticky header reads --header-h, so it has
+  // to follow the header through condensing, resizes and font/wrap changes.
+  function syncHeaderHeight() {
+    if (bar) document.documentElement.style.setProperty('--header-h', bar.offsetHeight + 'px');
+  }
+  syncHeaderHeight();
+  if (bar && window.ResizeObserver) new ResizeObserver(syncHeaderHeight).observe(bar);
+  window.addEventListener('resize', syncHeaderHeight);
+  window.ccakashicSyncHeaderHeight = syncHeaderHeight;
 
   function update() {
-    var scrollY = window.scrollY + 60;
+    if (bar) {
+      // Hysteresis: condensing shortens the header, which nudges the scroll
+      // position — a single threshold would flip back and forth on it.
+      var condensed = bar.classList.contains('is-condensed');
+      var next = condensed ? window.scrollY > 24 : window.scrollY > 72;
+      if (next !== condensed) {
+        bar.classList.toggle('is-condensed', next);
+        syncHeaderHeight();
+      }
+    }
+    if (!groups.length) return;
+    var offset = window.scrollY + (bar ? bar.offsetHeight : 0) + 20;
     var current = null;
     for (var i = 0; i < groups.length; i++) {
-      if (groups[i].offsetTop <= scrollY) current = groups[i];
+      if (groups[i].style.display !== 'none' && groups[i].offsetTop <= offset) current = groups[i];
     }
     var date = current ? current.dataset.date : '';
-    if (date) {
-      bar.textContent = date;
-      bar.classList.add('visible');
-    } else {
-      bar.classList.remove('visible');
-    }
     navItems.forEach(function(a) {
       a.classList.toggle('active', a.dataset.date === date);
     });
@@ -592,6 +742,75 @@ function detailNavJS(): string {
 
   window.addEventListener('scroll', update, { passive: true });
   update();
+})();
+`;
+}
+
+function messageFilterJS(): string {
+  // Only these hide whole messages; 'cost' just strips badges, so it never
+  // empties a date group.
+  const hideSelectors = JSON.stringify({
+    tools: '.msg-tool',
+    thinking: '.msg-thinking',
+    shell: '.msg-local-cmd',
+    system: '.msg-system',
+  });
+  return `
+(function() {
+  var KEY = 'ccakashic.msgFilters';
+  var HIDE = ${hideSelectors};
+  var boxes = Array.from(document.querySelectorAll('#detailFilters input[data-filter]'));
+  if (!boxes.length) return;
+  var groups = Array.from(document.querySelectorAll('.detail-date-group'));
+  var navItems = Array.from(document.querySelectorAll('.detail-sidenav-item[data-date]'));
+
+  // A date group whose every message is filtered out would otherwise leave a
+  // bare heading behind; hide it and its side-nav entry too.
+  function updateGroups(state) {
+    var hidden = Object.keys(HIDE).filter(function(k) { return state[k] === false; });
+    var visibleDates = {};
+    groups.forEach(function(g) {
+      var total = g.querySelectorAll(':scope > .msg').length;
+      var hiddenCount = 0;
+      hidden.forEach(function(k) {
+        hiddenCount += g.querySelectorAll(':scope > ' + HIDE[k]).length;
+      });
+      var empty = total > 0 && hiddenCount >= total;
+      g.style.display = empty ? 'none' : '';
+      if (!empty) visibleDates[g.dataset.date] = true;
+    });
+    navItems.forEach(function(a) {
+      a.style.display = visibleDates[a.dataset.date] ? '' : 'none';
+    });
+  }
+
+  function apply(persist) {
+    var state = {};
+    boxes.forEach(function(b) {
+      state[b.dataset.filter] = b.checked;
+      document.body.classList.toggle('hide-' + b.dataset.filter, !b.checked);
+    });
+    if (persist) {
+      try { localStorage.setItem(KEY, JSON.stringify(state)); } catch (e) {}
+    }
+    updateGroups(state);
+  }
+
+  var saved = {};
+  try { saved = JSON.parse(localStorage.getItem(KEY)) || {}; } catch (e) {}
+  boxes.forEach(function(b) {
+    if (saved[b.dataset.filter] === false) b.checked = false;
+    b.addEventListener('change', function() { apply(true); });
+  });
+  apply(false);
+
+  document.querySelectorAll('#detailFilters [data-preset]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      var showAll = btn.dataset.preset === 'all';
+      boxes.forEach(function(b) { b.checked = showAll; });
+      apply(true);
+    });
+  });
 })();
 `;
 }
