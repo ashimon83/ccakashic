@@ -442,9 +442,15 @@ ${resumeCSS()}
   <div id="session-bottom"></div>
   </main>
 </div>
+<div class="msg-pager" id="msgPager" hidden title="Jump between your own messages (p / n)">
+  <button type="button" class="msg-pager-btn" data-dir="-1" aria-label="Previous message of yours">&#9650;</button>
+  <span class="msg-pager-count" id="msgPagerCount">&ndash;</span>
+  <button type="button" class="msg-pager-btn" data-dir="1" aria-label="Next message of yours">&#9660;</button>
+</div>
 <script>${getAppJS()}
 ${detailNavJS()}
 ${messageFilterJS()}
+${msgPagerJS()}
 ${resumeJS(resume)}
 </script>
 </body>
@@ -634,6 +640,56 @@ body.hide-cost .tool-usage-row {
   display: none;
 }
 
+/* Pager over the user's own prompts. Always on screen, because finding "what
+   did I actually ask here" is the main reason to open a long session. */
+.msg-pager {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 150;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+}
+.msg-pager[hidden] { display: none; }
+.msg-pager-btn {
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 0.6rem;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.msg-pager-btn:hover {
+  background: var(--user-bg);
+  color: var(--text);
+}
+.msg-pager-btn:disabled {
+  opacity: 0.3;
+  cursor: default;
+  background: transparent;
+}
+.msg-pager-count {
+  min-width: 48px;
+  text-align: center;
+  font-size: 0.72rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+  user-select: none;
+}
+
 /* Anchors (timestamp links, date jumps) must clear the sticky header. */
 .msg, .detail-date-group {
   scroll-margin-top: calc(var(--header-h, 60px) + 44px);
@@ -814,8 +870,124 @@ function detailNavJS(): string {
     });
   }
 
+  // A sticky element keeps its box in the flow, so when the header condenses
+  // everything below it shifts up by the height it lost. A jump computed
+  // against the expanded layout therefore lands short — by the full delta when
+  // jumping from the top of the page. Nudge the target until it actually sits
+  // at its scroll-margin offset. Shared with the prompt pager below.
+  // update() runs first so the condense state and --header-h are settled before
+  // measuring: it normally reacts to the scroll event, which fires after this
+  // code would already have measured the stale layout. Looping synchronously
+  // (scrollBy applies immediately, and reading the rect forces layout) makes
+  // this converge in two or three passes instead of racing frames.
+  function align(el, tries) {
+    if (!el) return;
+    update();
+    var margin = parseFloat(getComputedStyle(el).scrollMarginTop) || 0;
+    if (!margin) return;
+    var delta = el.getBoundingClientRect().top - margin;
+    if (Math.abs(delta) < 2 || tries > 5) return;
+    window.scrollBy(0, delta);
+    align(el, tries + 1);
+  }
+  window.ccakashicAlign = align;
+
+  // Same correction for the date links and timestamp anchors.
+  window.addEventListener('hashchange', function() {
+    if (!location.hash) return;
+    align(document.getElementById(location.hash.slice(1)), 0);
+  });
+
   window.addEventListener('scroll', update, { passive: true });
   update();
+})();
+`;
+}
+
+function msgPagerJS(): string {
+  return `
+(function() {
+  // Direct children only: subagent conversations are inlined inside collapsed
+  // tool rows and carry their own .msg-user elements, which are not prompts
+  // the reader typed and cannot be scrolled to while collapsed.
+  var msgs = Array.from(document.querySelectorAll('.detail-date-group > .msg-user'));
+  var pager = document.getElementById('msgPager');
+  if (!pager || !msgs.length) return;
+  var countEl = document.getElementById('msgPagerCount');
+  var btns = Array.from(pager.querySelectorAll('.msg-pager-btn'));
+  var header = document.getElementById('sessionHeaderBar');
+  pager.hidden = false;
+
+  // Smooth scrolling fires many scroll events on the way to the target, so a
+  // second click mid-flight would otherwise read an in-between position and
+  // undo the first. Freeze the index until the animation settles.
+  var idx = -1;
+  var lockUntil = 0;
+
+  // scrollIntoView({block:'start'}) parks an element at its scroll-margin-top,
+  // which clears the sticky header. Read that same value back instead of
+  // guessing a header offset, or the message just jumped to reads as "not
+  // reached yet" and the counter falls back to "–".
+  function positionIndex() {
+    var margin = parseFloat(getComputedStyle(msgs[0]).scrollMarginTop) || 0;
+    var line = window.scrollY + margin + 8;
+    var cur = -1;
+    for (var i = 0; i < msgs.length; i++) {
+      if (msgs[i].getBoundingClientRect().top + window.scrollY <= line) cur = i;
+    }
+    return cur;
+  }
+
+  function render() {
+    countEl.textContent = (idx < 0 ? '–' : idx + 1) + ' / ' + msgs.length;
+    btns[0].disabled = idx <= 0;
+    btns[1].disabled = idx >= msgs.length - 1;
+  }
+
+  // A session can hold hundreds of prompts and positionIndex() measures every
+  // one, so coalesce the scroll storm into one measurement per frame.
+  var queued = false;
+  function sync() {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(function() {
+      queued = false;
+      if (Date.now() < lockUntil) return;
+      idx = positionIndex();
+      render();
+    });
+  }
+
+  // Jump instantly rather than smoothly: prompts in a long session sit tens of
+  // thousands of pixels apart, where a smooth scroll is a long blur rather than
+  // a sense of place. Re-measure the position each time so a jump still works
+  // after the reader has scrolled away by hand.
+  function go(dir) {
+    var cur = Date.now() < lockUntil ? idx : positionIndex();
+    var target = Math.max(0, Math.min(msgs.length - 1, cur < 0 ? 0 : cur + dir));
+    idx = target;
+    lockUntil = Date.now() + 400;
+    render();
+    var el = msgs[target];
+    el.scrollIntoView({ block: 'start' });
+    if (window.ccakashicAlign) window.ccakashicAlign(el, 0);
+    msgs.forEach(function(m) { m.classList.remove('focused'); });
+    el.classList.add('focused');
+    clearTimeout(el._flash);
+    el._flash = setTimeout(function() { el.classList.remove('focused'); }, 1600);
+  }
+
+  btns.forEach(function(b) {
+    b.addEventListener('click', function() { go(parseInt(b.dataset.dir, 10)); });
+  });
+  document.addEventListener('keydown', function(e) {
+    if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+    if (e.metaKey || e.ctrlKey || e.altKey) return;
+    if (e.key === 'n') go(1);
+    else if (e.key === 'p') go(-1);
+  });
+  window.addEventListener('scroll', sync, { passive: true });
+  sync();
 })();
 `;
 }

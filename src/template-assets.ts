@@ -660,8 +660,11 @@ export function getAppJS(): string {
     });
   }
 
-  // Keyboard navigation: j/k to move between user messages
-  var msgEls = Array.from(document.querySelectorAll('.msg-user, .msg-assistant'));
+  // Keyboard navigation: j/k to move between user messages. Subagent
+  // conversations are inlined inside collapsed tool rows, so their messages
+  // can't be scrolled to — skip them rather than swallowing keypresses.
+  var msgEls = Array.from(document.querySelectorAll('.msg-user, .msg-assistant'))
+    .filter(function(el) { return !el.closest('.subagent-content'); });
   var currentIdx = -1;
 
   document.addEventListener('keydown', function(e) {

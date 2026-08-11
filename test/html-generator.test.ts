@@ -100,3 +100,29 @@ describe('sticky session header', () => {
     expect(html).not.toContain('detailStickyBar');
   });
 });
+
+describe('prompt pager', () => {
+  const html = () => generate(parsed([{ type: 'user', text: 'hi', timestamp: TS }]));
+
+  it('renders an always-visible prev/next control with a counter', () => {
+    const h = html();
+    expect(h).toContain('id="msgPager"');
+    expect(h).toContain('id="msgPagerCount"');
+    expect(h).toContain('data-dir="-1"');
+    expect(h).toContain('data-dir="1"');
+    expect(h).toContain('position: fixed');
+  });
+
+  it('targets only top-level prompts, not the ones inside subagent transcripts', () => {
+    // Subagent conversations are inlined in collapsed tool rows and carry their
+    // own .msg-user nodes; scrolling to those does nothing.
+    expect(html()).toContain(".detail-date-group > .msg-user'");
+  });
+
+  it('re-aligns jumps against the condensing header', () => {
+    const h = html();
+    expect(h).toContain('ccakashicAlign');
+    expect(h).toContain('scrollMarginTop');
+    expect(h).toContain("addEventListener('hashchange'");
+  });
+});
