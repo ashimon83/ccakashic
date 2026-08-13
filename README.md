@@ -36,6 +36,10 @@ A local HTTP server starts and your browser opens automatically.
 - **Waiting-for-you indicator** — Sessions cmux is notifying you about (an **unread** "Claude is waiting for your input" / "needs your permission") get an orange frame and a `⏳ Your turn` / `🔐 Permission` badge. cmux marks the notification read the moment you focus that workspace, so the highlight **self-clears** on the next poll once you open the tab — it mirrors cmux's own badge exactly. The browser tab title shows the count (`(2) ccakashic`) and the favicon turns orange, so a glance at the tab tells you how many sessions need you. (Requires cmux; covers sessions resumed through ccakashic, which are tracked in the resume map.)
 - **Fully browser-based** — Dashboard → Project list → Session list → Conversation detail
 - **Chat-style layout** — User / assistant messages in chat bubbles
+- **Show only the conversation** — A `Show` row in the session header toggles each kind of noise off: `Tools`, `Injected`, `Thinking`, `Shell`, `System`, `Cost`. `Chat only` strips a session down to what was asked and answered; the choice is remembered across sessions
+- **Real prompts vs. injected text** — A `user` record in the log is not necessarily something you typed: hook feedback, skill bodies, task notifications and compaction summaries are all fed to the model in the user role. Those are labelled (`HOOK FEEDBACK`, `SKILL`, `TASK NOTIFICATION`, …) and collapsed into their own row instead of sharing your chat bubble
+- **Jump between your own prompts** — A pager in the corner (`▲ 11 / 31 ▼`, or `p` / `n`) moves through the prompts you actually typed and tracks where you are as you scroll
+- **Sticky session header** — Title, branch, model, Resume buttons and the filters stay on screen, condensing to a thin strip as you scroll
 - **Collapsible tool calls** — Bash, Read, Edit, and other tool invocations collapsed by default
 - **Diff view** — File edits shown with red/green line highlights
 - **Date navigation** — Side nav and sticky headers to jump between dates
@@ -47,7 +51,7 @@ A local HTTP server starts and your browser opens automatically.
 - **Session-level stats** — Estimated cost, turns, token breakdown, cache hit rate, and duration in the header
 - **Dark mode** — Follows `prefers-color-scheme` automatically
 - **Filter search** — Incremental filtering on list pages
-- **Keyboard navigation** — `j` / `k` to move between messages
+- **Keyboard navigation** — `j` / `k` to move between messages, `p` / `n` to move between your own prompts
 - **One-click resume in cmux** — `▶ Resume` spawns a [cmux](https://github.com/manaflow-ai/cmux) workspace that runs `cd <session cwd> && claude --resume <id>`; `📋 Copy` copies the same command for any terminal
 - **Zero dependencies** — Node.js built-in modules only
 
