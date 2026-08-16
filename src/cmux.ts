@@ -224,6 +224,134 @@ export function loadWorkspaceToSession(): Map<string, string> {
   return inv;
 }
 
+// --- Live workspace mapping, read from the running processes themselves ---
+//
+// The resume map only knows about sessions ccakashic itself resumed, so a
+// session you started by hand inside cmux has no workspace mapping and never
+// gets a waiting badge. Claude Code registers every running session in
+// ~/.claude/sessions/<pid>.json, and a session launched inside cmux inherits
+// CMUX_WORKSPACE_ID in its environment — together those give the same mapping
+// without ccakashic having been involved.
+//
+// The two sources are complements, not replacements: this one sees only live
+// processes, while the resume map still covers sessions that have since exited.
+
+const SESSION_REGISTRY_DIR = path.join(os.homedir(), '.claude', 'sessions');
+
+interface SessionRecord {
+  pid: number;
+  sessionId: string;
+  procStart?: string;
+}
+
+export function loadSessionRegistry(): SessionRecord[] {
+  let names: string[];
+  try {
+    names = fs.readdirSync(SESSION_REGISTRY_DIR);
+  } catch {
+    return []; // no registry (older Claude Code, or nothing has run yet)
+  }
+  const out: SessionRecord[] = [];
+  for (const f of names) {
+    if (!f.endsWith('.json')) continue;
+    try {
+      const o = JSON.parse(fs.readFileSync(path.join(SESSION_REGISTRY_DIR, f), 'utf-8'));
+      if (typeof o?.pid === 'number' && typeof o?.sessionId === 'string') {
+        out.push({ pid: o.pid, sessionId: o.sessionId, procStart: o.procStart });
+      }
+    } catch {
+      // a half-written or stale record; skip it
+    }
+  }
+  return out;
+}
+
+function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0); // signal 0 only probes; it does not signal
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// `ps eww` prints one line per process: pid, then the command, then the
+// process's ENTIRE environment — which routinely holds API keys and tokens.
+// Only CMUX_WORKSPACE_ID is ever pulled out of it; no other variable is
+// stored, returned or logged, and the raw output is not retained.
+export function parseWorkspaceEnv(psOutput: string): Map<number, string> {
+  const byPid = new Map<number, string>();
+  for (const line of psOutput.split('\n')) {
+    const pid = line.match(/^\s*(\d+)\s/);
+    if (!pid) continue;
+    const ws = line.match(/\bCMUX_WORKSPACE_ID=([A-Za-z0-9-]+)/);
+    if (ws) byPid.set(parseInt(pid[1], 10), ws[1].toUpperCase());
+  }
+  return byPid;
+}
+
+function runPlain(bin: string, args: string[], timeoutMs = 3000): Promise<string> {
+  return new Promise((resolve) => {
+    execFile(bin, args, { timeout: timeoutMs, maxBuffer: 8 * 1024 * 1024 }, (err, stdout) => {
+      resolve(err ? '' : stdout);
+    });
+  });
+}
+
+// A process's environment is fixed at exec time, so a pid only ever needs
+// looking up once. Keyed with procStart as well so a recycled pid can't
+// inherit the previous process's answer. null means "checked, not a cmux
+// process" — cached too, so those aren't re-probed on every poll.
+const workspaceEnvCache = new Map<string, string | null>();
+const envKey = (r: SessionRecord) => `${r.pid}:${r.procStart ?? ''}`;
+
+export async function liveWorkspaceToSession(): Promise<Map<string, string>> {
+  const live = loadSessionRegistry().filter((r) => isProcessAlive(r.pid));
+  const result = new Map<string, string>();
+  const unknown: SessionRecord[] = [];
+
+  for (const r of live) {
+    const key = envKey(r);
+    if (workspaceEnvCache.has(key)) {
+      const ws = workspaceEnvCache.get(key);
+      if (ws) result.set(ws, r.sessionId);
+    } else {
+      unknown.push(r);
+    }
+  }
+
+  if (unknown.length) {
+    // One ps for every new pid at once, not one spawn per session.
+    const out = await runPlain('ps', ['eww', '-p', unknown.map((r) => r.pid).join(',')]);
+    const byPid = parseWorkspaceEnv(out);
+    for (const r of unknown) {
+      const ws = byPid.get(r.pid) ?? null;
+      workspaceEnvCache.set(envKey(r), ws);
+      if (ws) result.set(ws, r.sessionId);
+    }
+  }
+
+  // Drop entries for processes that are gone, so a long-lived server doesn't
+  // accumulate one per session ever started.
+  const alive = new Set(live.map(envKey));
+  for (const key of workspaceEnvCache.keys()) {
+    if (!alive.has(key)) workspaceEnvCache.delete(key);
+  }
+
+  return result;
+}
+
+let cachedLiveWorkspaces: { value: Map<string, string>; at: number } | null = null;
+
+export async function liveWorkspaceToSessionCached(): Promise<Map<string, string>> {
+  if (cachedLiveWorkspaces && Date.now() - cachedLiveWorkspaces.at < 5_000) {
+    return cachedLiveWorkspaces.value;
+  }
+  const value = await liveWorkspaceToSession();
+  cachedLiveWorkspaces = { value, at: Date.now() };
+  return value;
+}
+
 export async function findLiveWorkspaceForSession(sessionId: string): Promise<string | null> {
   const mapped = loadResumeMap()[sessionId];
   if (!mapped) return null;
