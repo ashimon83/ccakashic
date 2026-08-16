@@ -18,6 +18,7 @@ import {
   listWorkspaceIdsCached,
   listWaitingWorkspacesCached,
   loadWorkspaceToSession,
+  liveWorkspaceToSessionCached,
   loadResumeMap,
   saveResumeMapEntry,
   findLiveWorkspaceForSession,
@@ -82,15 +83,24 @@ async function buildResumeContext(): Promise<ResumeContext | undefined> {
   return { token: RESUME_TOKEN, cmuxAvailable, openSessionIds };
 }
 
-// sessionId → wait reason, from cmux's unread notifications mapped through the
-// resume map. Only covers ccakashic-resumed sessions; others fall back to the
-// jsonl-derived activity below. Empty when cmux is unavailable/disabled.
+// sessionId → wait reason, from cmux's unread notifications resolved through
+// two independent workspace→session sources. Empty when cmux is
+// unavailable/disabled.
 async function buildCmuxWaitMap(): Promise<Map<string, WaitReason>> {
   const result = new Map<string, WaitReason>();
   if (NO_CMUX || !(await isCmuxAvailable())) return result;
   try {
     const waiting = await listWaitingWorkspacesCached();
+    // The resume map only covers sessions ccakashic resumed, which left every
+    // hand-started session permanently unbadged. The live map reads
+    // CMUX_WORKSPACE_ID from each running session's own process and covers
+    // those. They complement each other — the resume map still resolves
+    // sessions that have since exited — so the live one is layered on top,
+    // winning conflicts because it reflects the process attached right now.
     const wsToSession = loadWorkspaceToSession();
+    for (const [wsId, sessionId] of await liveWorkspaceToSessionCached()) {
+      wsToSession.set(wsId, sessionId);
+    }
     for (const [wsId, reason] of waiting) {
       const sessionId = wsToSession.get(wsId);
       if (sessionId) result.set(sessionId, reason);
