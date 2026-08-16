@@ -53,6 +53,7 @@ A local HTTP server starts and your browser opens automatically.
 - **Filter search** — Incremental filtering on list pages
 - **Keyboard navigation** — `j` / `k` to move between messages, `p` / `n` to move between your own prompts
 - **One-click resume in cmux** — `▶ Resume` spawns a [cmux](https://github.com/manaflow-ai/cmux) workspace that runs `cd <session cwd> && claude --resume <id>`; `📋 Copy` copies the same command for any terminal
+- **Read-only JSON feed** — `GET /api/sessions?limit=40&waiting=1` returns what the dashboard shows (title, project, branch, model, `status`, `waiting`, `detailUrl`, `resumeCommand`) so other local tools can reuse the waiting signal. `waiting=1` returns only the sessions asking for you, and is the cheap path — it looks those up by id instead of parsing a whole window of session files
 - **Zero dependencies** — Node.js built-in modules only
 
 ## cmux integration

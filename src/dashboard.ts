@@ -53,7 +53,7 @@ export function renderPaneBody(parsed: ParsedSession): string {
   return note + messages.map(renderMessage).join('\n');
 }
 
-function paneTitle(s: RecentSession): string {
+export function paneTitle(s: RecentSession): string {
   return s.customTitle || s.aiTitle || s.slug || s.id.slice(0, 8);
 }
 
