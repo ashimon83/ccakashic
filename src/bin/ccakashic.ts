@@ -5,7 +5,8 @@ import * as os from 'os';
 import * as path from 'path';
 import { exec } from 'child_process';
 import { getOrCreateToken } from '../util';
-import { listProjects, listSessions, listRecentSessions, findSessionForCwd, readCwdFromSession } from '../discover';
+import { listProjects, listSessions, listRecentSessions, findRecentSessionsByIds, findSessionForCwd, readCwdFromSession } from '../discover';
+import { toSessionRow, orderSessionRows, parseSessionLimit } from '../api';
 import { parseSession, parseSessionCached } from '../parser';
 import { generate } from '../html-generator';
 import { generateIndex, generateSessionList } from '../pages';
@@ -275,6 +276,28 @@ const server = http.createServer(async (req, res) => {
       }
       const parsed = await parseSessionCached(sessionPath, mtime);
       res.end(JSON.stringify({ changed: true, mtime, status, ago, waiting, html: renderPaneBody(parsed) }));
+      return;
+    }
+
+    // Read-only feed of the dashboard's own view, for other local tools.
+    if (pathname === '/api/sessions') {
+      const limit = parseSessionLimit(url.searchParams.get('limit'));
+      const waitingOnly = url.searchParams.get('waiting') === '1';
+      const cmuxWait = await buildCmuxWaitMap();
+      // Waiting sessions are fetched by id rather than filtered out of the
+      // recent window: a session can sit waiting while other projects churn
+      // past it, and reading a wide window means parsing every file in it.
+      const sessions = waitingOnly
+        ? await findRecentSessionsByIds([...cmuxWait.keys()])
+        : await listRecentSessions(limit);
+      const rows = orderSessionRows(
+        sessions
+          .map((s) => toSessionRow(s, resolveWaiting(s.id, cmuxWait)))
+          .filter((r) => !waitingOnly || r.waiting !== null),
+        limit,
+      );
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(rows));
       return;
     }
 

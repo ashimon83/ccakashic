@@ -245,6 +245,32 @@ export async function listRecentSessions(limit: number): Promise<RecentSession[]
   }));
 }
 
+// Locate specific sessions by id. scanProjects only stats filenames, so this
+// parses just the matched files — unlike listRecentSessions, which parses every
+// file in its window (getSessionPreview reads a session end to end to total its
+// tokens). Callers that know which ids they want should use this: a session can
+// sit waiting for you while other projects churn past it, so it is not
+// necessarily inside any "most recent N" window.
+export async function findRecentSessionsByIds(ids: string[]): Promise<RecentSession[]> {
+  const wanted = new Set(ids);
+  if (!wanted.size) return [];
+  const scans = await scanProjects();
+  const hits: { file: string; scan: ProjectScan }[] = [];
+  for (const scan of scans) {
+    for (const f of scan.files) {
+      if (wanted.has(f.file.replace(/\.jsonl$/, ''))) {
+        hits.push({ file: path.join(scan.dir, f.file), scan });
+      }
+    }
+  }
+  const previews = await Promise.all(hits.map((h) => getSessionPreview(h.file)));
+  return previews.map((s, i) => ({
+    ...s,
+    projectRawName: hits[i].scan.rawName,
+    projectName: hits[i].scan.name,
+  }));
+}
+
 export function readCwdFromSession(filePath: string): Promise<string | null> {
   return new Promise((resolve) => {
     const rl = readline.createInterface({
