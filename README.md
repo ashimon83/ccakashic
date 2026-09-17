@@ -53,6 +53,7 @@ A local HTTP server starts and your browser opens automatically.
 - **Filter search** — Incremental filtering on list pages
 - **Keyboard navigation** — `j` / `k` to move between messages, `p` / `n` to move between your own prompts
 - **One-click resume in cmux** — `▶ Resume` spawns a [cmux](https://github.com/manaflow-ai/cmux) workspace that runs `cd <session cwd> && claude --resume <id>`; `📋 Copy` copies the same command for any terminal
+- **Reopen what you had open** — After a reboot or a hung cmux, `npx ccakashic restore` (or the dashboard banner) reopens the whole set of sessions you were working in, each in its own cmux workspace. See [below](#reopen-the-sessions-you-had-open)
 - **Read-only JSON feed** — `GET /api/sessions?limit=40&waiting=1` returns what the dashboard shows (title, project, branch, model, `status`, `waiting`, `detailUrl`, `resumeCommand`) so other local tools can reuse the waiting signal. `waiting=1` returns only the sessions asking for you, and is the cheap path — it looks those up by id instead of parsing a whole window of session files
 - **Zero dependencies** — Node.js built-in modules only
 
@@ -73,6 +74,27 @@ Notes:
 - cmux's socket only accepts callers inside the cmux process tree, so run `npx ccakashic` from a terminal **inside cmux** (or configure a socket password in cmux settings and export `CMUX_SOCKET_PASSWORD`)
 - The `cmux` binary is found via `$PATH`, then the common Homebrew locations. If it lives elsewhere, point `CCAKASHIC_CMUX` at it (e.g. `CCAKASHIC_CMUX=/path/to/cmux npx ccakashic`)
 - Disable the integration with `--no-cmux` or `CCAKASHIC_NO_CMUX=1`
+
+## Reopen the sessions you had open
+
+After a reboot (memory pressure, an update) or a hung cmux you had to kill, every `claude` you had open is gone — cmux brings back its workspace tabs, but not the sessions inside them. One command reopens the last set you were working in.
+
+```bash
+# From a terminal inside cmux
+npx ccakashic restore            # lists the sessions you had open, then reopens them
+npx ccakashic restore --dry-run  # just list them
+
+# Optional: record open sessions every minute (launchd, macOS) for an exact list
+npx ccakashic install-agent
+```
+
+**No setup needed.** Without the agent, the list is estimated from the conversation logs: the most recent group of sessions that stopped together. When they were closed normally — including by a shutdown or reboot — each wrote an exit record at the same moment, so the group is precise. When cmux was force-quit nothing gets written, so it falls back to "active within 15 minutes of the last one", which misses sessions that sat idle. Install the agent if that case matters to you.
+
+Sessions are only offered when **none of the group is still running** alongside something older: if you closed one session while others kept going, nothing is offered. Sessions you have already reopened drop off the list, and once a group is fully reopened, older ones are not dug up.
+
+The dashboard shows the same list as a banner (`↺ N sessions you had open`) with checkboxes, `Reopen selected` and `Dismiss`. Each session opens in its own background cmux workspace, a moment apart so a dozen `claude` processes don't start at once. Without cmux, the command prints the `cd … && claude --resume …` lines to paste instead.
+
+With the agent, the list comes from Claude Code's live-session registry (`~/.claude/sessions/`, interactive sessions only), copied every minute into `~/.config/ccakashic/live-sessions.json`. The agent runs its own copy of the recorder from `~/.config/ccakashic/agent/`, not the npx cache, so clearing the cache or upgrading doesn't silently stop it; any later `npx ccakashic` run refreshes that copy. Remove it with `npx ccakashic uninstall-agent`.
 
 ## Options
 
