@@ -4,6 +4,8 @@ import type { ParsedSession } from './parser';
 import type { RecentSession } from './discover';
 import { resumeButtonsHtml, resumeCSS, resumeJS, type ResumeContext } from './resume-ui';
 import { escapeHtml, ACTIVE_THRESHOLD_MS } from './util';
+import { buildResumeCommand } from './cmux';
+import type { RestoreItem } from './restore';
 
 // Multi-pane dashboard: the N most recently active sessions across all
 // projects, each pane showing the last 24h of conversation as a scrollable
@@ -71,10 +73,43 @@ export function waitBadgeHtml(waiting: WaitState): string {
   return `<span class="dash-wait-badge dash-wait-${waiting}">${label}</span>`;
 }
 
+// The sessions you last had open, offered for reopening (see restore.ts).
+export interface RestoreBanner {
+  token: string;
+  stoppedAt: number;
+  estimated: boolean;
+  cmuxAvailable: boolean;
+  items: RestoreItem[];
+}
+
+export function restoreBannerHtml(banner: RestoreBanner | undefined): string {
+  if (!banner || !banner.items.length) return '';
+  const n = banner.items.length;
+  const rows = banner.items.map((it) => {
+    const title = it.projectRawName
+      ? `<a href="/project/${encodeURIComponent(it.projectRawName)}/session/${encodeURIComponent(it.sessionId)}">${escapeHtml(it.title)}</a>`
+      : escapeHtml(it.title);
+    return `<li><label><input type="checkbox" class="dash-restore-check" value="${escapeHtml(it.sessionId)}" data-cmd="${escapeHtml(buildResumeCommand(it.cwd, it.sessionId))}" checked> ${title}</label> <span class="dash-restore-cwd">${escapeHtml(it.cwd)}</span></li>`;
+  }).join('');
+  const action = banner.cmuxAvailable
+    ? `<button type="button" class="dash-restore-run">&#9654; Reopen selected</button>`
+    : `<button type="button" class="dash-restore-copy">&#128203; Copy commands</button>`;
+  return `<div class="dash-restore" data-stopped-at="${banner.stoppedAt}" data-token="${escapeHtml(banner.token)}">
+  <div class="dash-restore-head">
+    <span>&#8634; <b>${n} session${n === 1 ? '' : 's'}</b> you had open until <span class="dash-restore-at" data-ts="${banner.stoppedAt}"></span>${banner.estimated ? ' <span class="dash-restore-est" title="Estimated from conversation logs; sessions left idle before cmux was force-quit may be missing. Run `npx ccakashic install-agent` for an exact list.">(estimated)</span>' : ''}</span>
+    ${action}
+    <button type="button" class="dash-restore-dismiss">Dismiss</button>
+    <span class="dash-restore-status"></span>
+  </div>
+  <ul class="dash-restore-list">${rows}</ul>
+</div>`;
+}
+
 export function generateDashboard(
   panes: DashboardPane[],
   paneCount: number,
   resume: ResumeContext | undefined,
+  restore?: RestoreBanner,
 ): string {
   const cols = paneCount <= 4 ? Math.max(panes.length, 1) : Math.ceil(paneCount / 2);
   const rows = paneCount <= 4 ? 1 : 2;
@@ -123,6 +158,7 @@ ${dashboardCSS(cols, rows)}
   <span class="dash-counts">Panes: ${countLinks}</span>
   <a class="dash-nav-link" href="/projects">All projects &rarr;</a>
 </div>
+${restoreBannerHtml(restore)}
 <div class="dash-grid">
 ${panesHtml || '<div class="empty">No sessions found</div>'}
 </div>
@@ -265,6 +301,36 @@ function dashboardCSS(cols: number, rows: number): string {
 }
 .empty { text-align: center; color: var(--text-muted); padding: 40px; }
 
+.dash-restore {
+  flex-shrink: 0;
+  max-height: 40vh;
+  overflow-y: auto;
+  margin: 8px 8px 0;
+  padding: 8px 12px;
+  border: 1px solid #f97316;
+  border-radius: 8px;
+  background: rgba(249, 115, 22, 0.08);
+  font-size: 0.82rem;
+}
+.dash-restore-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.dash-restore-head button {
+  font-size: 0.75rem;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: var(--tool-bg);
+  color: var(--text);
+  cursor: pointer;
+}
+.dash-restore-head .dash-restore-run { border-color: #f97316; }
+.dash-restore-head button:disabled { opacity: 0.5; cursor: wait; }
+.dash-restore-status, .dash-restore-est { color: var(--text-muted); }
+.dash-restore-list { list-style: none; margin: 6px 0 0; padding: 0; columns: 2 360px; }
+.dash-restore-list li { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; padding: 1px 0; }
+.dash-restore-list a { color: var(--text); }
+.dash-restore-cwd { color: var(--text-muted); font-size: 0.72rem; margin-left: 4px; }
+
 @media (max-width: 900px) {
   .dash-page { height: auto; overflow: auto; }
   .dash-grid { grid-template-columns: 1fr; grid-template-rows: none; grid-auto-rows: 70vh; }
@@ -334,6 +400,46 @@ function dashboardJS(): string {
       if (window.ccakashicApplyMarkdown) window.ccakashicApplyMarkdown(body);
       if (nearBottom) scrollToBottom(body);
     }).catch(function() { /* server briefly unavailable; retry next tick */ });
+  }
+
+  var restore = document.querySelector('.dash-restore');
+  if (restore) {
+    var at = restore.querySelector('.dash-restore-at');
+    if (at) at.textContent = new Date(Number(at.dataset.ts)).toLocaleString();
+    var status = restore.querySelector('.dash-restore-status');
+    var checked = function() {
+      return Array.prototype.slice.call(restore.querySelectorAll('.dash-restore-check:checked'));
+    };
+    var post = function(path, body) {
+      body.stoppedAt = Number(restore.dataset.stoppedAt);
+      return fetch(path, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Ccakashic-Token': restore.dataset.token },
+        body: JSON.stringify(body)
+      }).then(function(res) { return res.json(); });
+    };
+    restore.addEventListener('click', function(e) {
+      var btn = e.target.closest ? e.target.closest('button') : null;
+      if (!btn) return;
+      if (btn.classList.contains('dash-restore-dismiss')) {
+        post('/api/restore/dismiss', {}).then(function() { restore.remove(); });
+      } else if (btn.classList.contains('dash-restore-copy')) {
+        var cmds = checked().map(function(c) { return c.dataset.cmd; }).join('\n');
+        navigator.clipboard.writeText(cmds).then(function() { status.textContent = 'Copied'; });
+      } else if (btn.classList.contains('dash-restore-run')) {
+        var ids = checked().map(function(c) { return c.value; });
+        if (!ids.length) return;
+        btn.disabled = true;
+        status.textContent = 'Reopening ' + ids.length + '…';
+        post('/api/restore', { sessions: ids }).then(function(data) {
+          if (!data.outcomes) { btn.disabled = false; status.textContent = data.error || 'Reopen failed'; return; }
+          var failed = data.outcomes.filter(function(o) { return !o.ok; });
+          if (!failed.length) { restore.remove(); return; }
+          btn.disabled = false;
+          status.textContent = 'Failed: ' + failed.map(function(o) { return o.title + ' (' + o.message + ')'; }).join(', ');
+        }).catch(function() { btn.disabled = false; status.textContent = 'Reopen failed: server unreachable'; });
+      }
+    });
   }
 
   syncWaitingIndicator();

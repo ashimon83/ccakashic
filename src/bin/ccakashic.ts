@@ -3,6 +3,7 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import * as readline from 'readline';
 import { exec } from 'child_process';
 import { getOrCreateToken } from '../util';
 import { listProjects, listSessions, listRecentSessions, findRecentSessionsByIds, findSessionForCwd, readCwdFromSession } from '../discover';
@@ -10,8 +11,11 @@ import { toSessionRow, orderSessionRows, parseSessionLimit } from '../api';
 import { parseSession, parseSessionCached } from '../parser';
 import { generate } from '../html-generator';
 import { generateIndex, generateSessionList } from '../pages';
-import { generateDashboard, renderPaneBody, paneStatus, timeAgo, PANE_COUNTS, DEFAULT_PANE_COUNT, type WaitState } from '../dashboard';
+import { generateDashboard, renderPaneBody, paneStatus, timeAgo, PANE_COUNTS, DEFAULT_PANE_COUNT, type WaitState, type RestoreBanner } from '../dashboard';
 import type { WaitReason } from '../cmux';
+import { loadSnapshot, saveSnapshot, snapshotNow } from '../snapshot';
+import { describeStopped, restoreAll, detectLastStop } from '../restore';
+import { installAgent, uninstallAgent, refreshInstalledAgent } from '../agent';
 import type { ResumeContext } from '../resume-ui';
 import {
   isCmuxAvailable,
@@ -205,6 +209,57 @@ async function handleResume(req: http.IncomingMessage, res: http.ServerResponse)
   }
 }
 
+// The stopped group the dashboard offers to bring back, unless dismissed.
+async function buildRestoreBanner(): Promise<RestoreBanner | undefined> {
+  try {
+    const { state, stop } = detectLastStop();
+    if (!stop || !stop.sessions.length || stop.stoppedAt === state.dismissedStopAt) return undefined;
+    const cmuxAvailable = !NO_CMUX && await isCmuxAvailable();
+    return {
+      token: RESUME_TOKEN,
+      stoppedAt: stop.stoppedAt,
+      estimated: !!stop.estimated,
+      cmuxAvailable,
+      items: await describeStopped(stop.sessions),
+    };
+  } catch {
+    return undefined; // the banner is an extra; never break the dashboard over it
+  }
+}
+
+async function handleRestore(req: http.IncomingMessage, res: http.ServerResponse, action: 'run' | 'dismiss'): Promise<void> {
+  const respond = (status: number, body: object) => {
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(body));
+  };
+  if (req.method !== 'POST') return respond(405, { error: 'POST only' });
+  if (req.headers['x-ccakashic-token'] !== RESUME_TOKEN) return respond(403, { error: 'Invalid token' });
+  let body: any;
+  try {
+    body = await readJsonBody(req);
+  } catch (err: any) {
+    return respond(400, { error: err?.message || 'Bad request' });
+  }
+
+  // Recompute rather than trust the page: sessions may have been resumed in the
+  // meantime, and resuming a live one again would fork it.
+  const { state, stop } = detectLastStop();
+  if (!stop || stop.stoppedAt !== body?.stoppedAt) {
+    return respond(409, { error: 'The list is out of date — reload the dashboard' });
+  }
+
+  if (action === 'dismiss') {
+    saveSnapshot({ ...state, dismissedStopAt: stop.stoppedAt });
+    return respond(200, { ok: true });
+  }
+
+  if (NO_CMUX || !(await isCmuxAvailable())) return respond(503, { error: 'cmux is not reachable' });
+  const wanted = Array.isArray(body.sessions) ? new Set(body.sessions) : null;
+  const chosen = stop.sessions.filter((s) => !wanted || wanted.has(s.sessionId));
+  const outcomes = await restoreAll(await describeStopped(chosen));
+  return respond(200, { outcomes });
+}
+
 // Only accept loopback Host headers. The server binds 127.0.0.1, but without
 // this check a malicious site could DNS-rebind its hostname to 127.0.0.1 and
 // become same-origin, defeating the resume token and reading session content.
@@ -236,6 +291,11 @@ const server = http.createServer(async (req, res) => {
       return;
     }
 
+    if (pathname === '/api/restore' || pathname === '/api/restore/dismiss') {
+      await handleRestore(req, res, pathname === '/api/restore' ? 'run' : 'dismiss');
+      return;
+    }
+
     if (pathname === '/' || pathname === '') {
       const requested = parseInt(url.searchParams.get('n') || '') || DEFAULT_PANE_COUNT;
       const paneCount = PANE_COUNTS.includes(requested) ? requested : DEFAULT_PANE_COUNT;
@@ -247,7 +307,7 @@ const server = http.createServer(async (req, res) => {
         waiting: resolveWaiting(session.id, cmuxWait),
       })));
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(generateDashboard(panes, paneCount, await buildResumeContext()));
+      res.end(generateDashboard(panes, paneCount, await buildResumeContext(), await buildRestoreBanner()));
       return;
     }
 
@@ -459,7 +519,93 @@ async function startServer(startPort: number): Promise<number> {
   throw new Error(`No available port after ${MAX_PORT_TRIES} tries starting at ${startPort}`);
 }
 
+function formatClock(ms: number): string {
+  const d = new Date(ms);
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function askYesNo(question: string): Promise<boolean> {
+  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
+  return new Promise((resolve) => {
+    rl.question(question, (answer: string) => {
+      rl.close();
+      resolve(/^(y|yes|)$/i.test(answer.trim()));
+    });
+  });
+}
+
+async function runRestoreCommand(): Promise<void> {
+  const dryRun = process.argv.includes('--dry-run');
+  const yes = process.argv.includes('--yes') || process.argv.includes('-y');
+  const previousRun = loadSnapshot().lastRunAt;
+  const { stop, agentInstalled } = detectLastStop();
+
+  if (stop?.estimated) {
+    console.log('Note: estimated from conversation logs. Sessions left idle before cmux was force-quit may be missing.');
+    console.log(agentInstalled
+      ? '      (these closed before the snapshot agent started recording)\n'
+      : '      Run `npx ccakashic install-agent` to record live sessions every minute for an exact list.\n');
+  } else if (!agentInstalled) {
+    console.log('Tip: `npx ccakashic install-agent` records open sessions every minute for an exact list.\n');
+  } else if (previousRun && Date.now() - previousRun > 5 * 60_000) {
+    console.log(`Note: the last snapshot before this one was at ${formatClock(previousRun)}.\n`);
+  }
+
+  if (!stop || !stop.sessions.length) {
+    console.log('Nothing to reopen: no closed sessions found (or some from that time are still running).');
+    return;
+  }
+  const items = await describeStopped(stop.sessions);
+  console.log(`${items.length} session(s) you had open until ${formatClock(stop.stoppedAt)}${stop.estimated ? ' (estimated)' : ''}:\n`);
+  for (const it of items) console.log(`  • ${it.title}\n    ${it.cwd}`);
+  console.log('');
+  if (dryRun) return;
+
+  if (NO_CMUX || !(await isCmuxAvailable())) {
+    console.log('cmux is not reachable (run this from a terminal inside cmux). Commands to resume by hand:\n');
+    for (const it of items) console.log(buildResumeCommand(it.cwd, it.sessionId));
+    return;
+  }
+  if (!yes && !(await askYesNo(`Reopen all ${items.length} in new cmux workspaces? [Y/n] `))) return;
+
+  const outcomes = await restoreAll(items, (o) => {
+    console.log(o.ok ? `  ✓ ${o.title}` : `  ✗ ${o.title} — ${o.message}`);
+  });
+  const failed = outcomes.filter((o) => !o.ok).length;
+  console.log(`\nReopened ${outcomes.length - failed} / ${outcomes.length}.`);
+}
+
+async function runSubcommand(name: string): Promise<boolean> {
+  switch (name) {
+    case 'snapshot': {
+      // One-off record; the launchd agent runs its own copy of the same code.
+      snapshotNow();
+      return true;
+    }
+    case 'restore':
+      await runRestoreCommand();
+      return true;
+    case 'install-agent':
+      await installAgent();
+      return true;
+    case 'uninstall-agent':
+      await uninstallAgent();
+      return true;
+    default:
+      return false;
+  }
+}
+
 async function main() {
+  refreshInstalledAgent();
+  const sub = process.argv[2];
+  if (sub && !sub.startsWith('-')) {
+    if (await runSubcommand(sub)) return;
+    console.error(`Unknown command: ${sub}\nUsage: ccakashic [restore [--dry-run] [--yes] | install-agent | uninstall-agent | snapshot]`);
+    process.exit(1);
+  }
+
   const existing = await findExistingCcakashic(PORT);
   if (existing) {
     const url = `http://127.0.0.1:${existing}`;
