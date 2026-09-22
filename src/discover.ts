@@ -40,6 +40,30 @@ export interface RecentSession extends SessionPreview {
   projectName: string;
 }
 
+// Every session id that has a conversation log, by filename only (no parsing).
+// A session with no log cannot be resumed, so restore uses this to skip them.
+export function listKnownSessionIds(root = CLAUDE_DIR): Set<string> {
+  const ids = new Set<string>();
+  let dirs: string[];
+  try {
+    dirs = fs.readdirSync(root);
+  } catch {
+    return ids;
+  }
+  for (const d of dirs) {
+    let names: string[];
+    try {
+      names = fs.readdirSync(path.join(root, d));
+    } catch {
+      continue;
+    }
+    for (const f of names) {
+      if (f.endsWith('.jsonl')) ids.add(f.slice(0, -'.jsonl'.length));
+    }
+  }
+  return ids;
+}
+
 export function decodeDirName(dirName: string): string {
   // Directory names encode paths: /Users/foo/bar → -Users-foo-bar
   // This is lossy (dots become dashes too), but good enough for display

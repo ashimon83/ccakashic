@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { CLAUDE_DIR } from './discover';
-import type { LastStop, LiveSession, StoppedSession } from './snapshot';
+import { pickStoppedGroup, type LastStop, type LiveSession, type StoppedSession } from './snapshot';
 
 // Best-effort "what was running before the crash" from the conversation logs
 // alone, for when the snapshot agent is not installed.
@@ -109,6 +109,7 @@ export function inferLastStop(
   now = Date.now(),
   root = CLAUDE_DIR,
   readFacts: (file: string) => LogFacts = readLogFacts,
+  notOlderThan = 0,
 ): LastStop | null {
   const liveIds = new Set(live.map((s) => s.sessionId));
   const factsCache = new Map<string, LogFacts>();
@@ -118,26 +119,34 @@ export function inferLastStop(
     return v;
   };
 
-  // Newest interactive session that is no longer running marks the stop.
-  const dead = listLogFiles(root, now - LOOKBACK_MS).filter((f) => !liveIds.has(f.sessionId));
-  const newest = dead.find((f) => facts(f).interactive && facts(f).cwd);
-  if (!newest) return null;
-  const stoppedAt = Math.floor(newest.mtime); // an integer survives the round trip through the page
+  const dead = listLogFiles(root, now - LOOKBACK_MS)
+    .filter((f) => !liveIds.has(f.sessionId) && facts(f).interactive && facts(f).cwd);
+  if (!dead.length) return null;
 
-  // Same rule as the recorded path: a session started before the stop and still
-  // running means the others were closed on purpose, not killed together.
+  // Same shape as the recorded path: prefer a group that stopped together over a
+  // lone session that happens to be newer (a scheduled run, a quick question).
+  // Without exit records the times are "last active", so they spread out more.
+  const anchor = dead[0];
+  const gap = facts(anchor).exited ? EXIT_BURST_WINDOW_MS : ACTIVITY_WINDOW_MS;
+  const group = pickStoppedGroup(dead, (f) => f.mtime, gap);
+  const burst = facts(group[0]).exited;
+  const stoppedAt = Math.floor(group[0].mtime); // an integer survives the round trip through the page
+  if (stoppedAt < notOlderThan) return null;
+
+  // A session started before the stop and still running means the others were
+  // closed on purpose, not taken down together.
   if (live.some((s) => s.startedAt !== undefined && s.startedAt <= stoppedAt)) return null;
 
-  const burst = facts(newest).exited;
-  const window = burst ? EXIT_BURST_WINDOW_MS : ACTIVITY_WINDOW_MS;
-  const sessions: StoppedSession[] = [];
-  for (const f of dead) {
-    if (f.mtime < stoppedAt - window) break; // sorted newest first
-    const x = facts(f);
-    if (!x.interactive || !x.cwd) continue;
+  const sessions: StoppedSession[] = group
     // In a shutdown burst, only sessions that actually exited belong to it.
-    if (burst && !x.exited) continue;
-    sessions.push({ sessionId: f.sessionId, cwd: x.cwd, name: null, proc: 'log', aliveSince: f.mtime, lastSeenAlive: f.mtime });
-  }
+    .filter((f) => !burst || facts(f).exited)
+    .map((f) => ({
+      sessionId: f.sessionId,
+      cwd: facts(f).cwd as string,
+      name: null,
+      proc: 'log',
+      aliveSince: f.mtime,
+      lastSeenAlive: f.mtime,
+    }));
   return { stoppedAt, sessions, estimated: true };
 }

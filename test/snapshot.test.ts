@@ -77,6 +77,51 @@ describe('findLastStop', () => {
     expect(findLastStop(state, new Set(['a']))).toBeNull();
   });
 
+  it('prefers a group that stopped together over a lone, newer session', () => {
+    const t0 = 1_000_000_000;
+    const state = replay([
+      { at: t0, ids: ['a', 'b', 'c'] },
+      // later a scheduled run comes and goes on its own
+      { at: t0 + 20 * MIN, ids: ['cron'] },
+      { at: t0 + 40 * MIN, ids: [] },
+    ]);
+    const stop = findLastStop(state, new Set());
+    expect(stop?.sessions.map((s) => s.sessionId).sort()).toEqual(['a', 'b', 'c']);
+    expect(stop?.stoppedAt).toBe(t0);
+  });
+
+  it('does not offer a group older than the last one offered', () => {
+    const t0 = 1_000_000_000;
+    const state = replay([{ at: t0, ids: ['a', 'b'] }, { at: t0 + 60 * MIN, ids: [] }]);
+    expect(findLastStop(state, new Set(), () => true, t0 + 1)).toBeNull();
+    expect(findLastStop(state, new Set(), () => true, t0)?.sessions.length).toBe(2);
+  });
+
+  it('is not masked by a throwaway session opened and closed after the stop', () => {
+    const t0 = 1_000_000_000;
+    const state = replay([
+      { at: t0, ids: ['a', 'b', 'c'] },
+      // cmux goes down; a few minutes later one session is started and closed
+      { at: t0 + 4 * MIN, ids: ['stray'] },
+    ]);
+    const stop = findLastStop(state, new Set(), (id) => id !== 'stray');
+    // the stray has no conversation log, so it cannot stand in for the group
+    expect(stop?.sessions.map((s) => s.sessionId).sort()).toEqual(['a', 'b', 'c']);
+    expect(stop?.stoppedAt).toBe(t0);
+  });
+
+  it('keeps a group together across the ticks it took them to die', () => {
+    const t0 = 1_000_000_000;
+    const state = replay([
+      { at: t0, ids: ['a', 'b', 'c'] },
+      { at: t0 + MIN, ids: ['b', 'c'] },  // a already gone
+      { at: t0 + 2 * MIN, ids: ['c'] },
+      { at: t0 + 30 * MIN, ids: ['new'] },
+    ]);
+    const stop = findLastStop(state, new Set(['new']));
+    expect(stop?.sessions.map((s) => s.sessionId).sort()).toEqual(['a', 'b', 'c']);
+  });
+
   it('returns null when everything recorded is still running', () => {
     const state = replay([{ at: 1_000_000_000, ids: ['a'] }]);
     expect(findLastStop(state, new Set(['a']))).toBeNull();
