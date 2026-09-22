@@ -1,5 +1,5 @@
 import * as fs from 'fs';
-import { findRecentSessionsByIds } from './discover';
+import { findRecentSessionsByIds, listKnownSessionIds } from './discover';
 import { resumeInNewWorkspace, saveResumeMapEntry } from './cmux';
 import { recordLive, loadSnapshot, saveSnapshot, readLiveSessions, findLastStop, type LastStop, type LiveSession, type SnapshotState, type StoppedSession } from './snapshot';
 import { inferLastStop } from './infer';
@@ -33,7 +33,14 @@ const STAGGER_MS = 1500;
 export function detectLastStop(now = Date.now()): { state: SnapshotState; stop: LastStop | null; agentInstalled: boolean } {
   const live = readLiveSessions();
   const agentInstalled = fs.existsSync(AGENT_PLIST);
-  const { state, stop } = chooseStop(recordLive(loadSnapshot(), live, now), live, agentInstalled, () => inferLastStop(live, now));
+  const known = listKnownSessionIds();
+  const { state, stop } = chooseStop(
+    recordLive(loadSnapshot(), live, now),
+    live,
+    agentInstalled,
+    (notOlderThan) => inferLastStop(live, now, undefined, undefined, notOlderThan),
+    (id) => known.has(id),
+  );
   try {
     saveSnapshot(state);
   } catch {
@@ -48,22 +55,31 @@ export function chooseStop(
   state: SnapshotState,
   live: LiveSession[],
   agentInstalled: boolean,
-  infer: () => LastStop | null,
+  infer: (notOlderThan: number) => LastStop | null,
+  resumable: (sessionId: string) => boolean = () => true,
 ): { state: SnapshotState; stop: LastStop | null } {
-  if (agentInstalled) {
-    const recorded = findLastStop(state, new Set(live.map((s) => s.sessionId)));
-    if (recorded) return { state, stop: recorded };
-  }
-  const inferred = infer();
-  if (!inferred) return { state, stop: null };
-  // Within the recorded period the agent saw no stop, so trust it over a guess.
-  if (agentInstalled && state.recordingSince !== null && inferred.stoppedAt >= state.recordingSince) {
-    return { state, stop: null };
-  }
-  if (state.lastEstimatedStopAt !== null && inferred.stoppedAt < state.lastEstimatedStopAt) {
-    return { state, stop: null };
-  }
-  return { state: { ...state, lastEstimatedStopAt: inferred.stoppedAt }, stop: inferred };
+  // Never dig further back than the last group offered: once those are reopened,
+  // the group before them is just history, not something that stopped on you.
+  const floor = state.lastOfferedStopAt ?? 0;
+  const liveIds = new Set(live.map((s) => s.sessionId));
+  const stop = (agentInstalled ? findLastStop(state, liveIds, resumable, floor) : null)
+    // Within the recorded period the agent's records are the truth, so the log
+    // estimate is only for stops from before recording began.
+    ?? inferBeforeRecording(state, agentInstalled, infer, floor);
+  if (!stop) return { state, stop: null };
+  return { state: { ...state, lastOfferedStopAt: Math.max(floor, stop.stoppedAt) }, stop };
+}
+
+function inferBeforeRecording(
+  state: SnapshotState,
+  agentInstalled: boolean,
+  infer: (notOlderThan: number) => LastStop | null,
+  floor: number,
+): LastStop | null {
+  const inferred = infer(floor);
+  if (!inferred) return null;
+  if (agentInstalled && state.recordingSince !== null && inferred.stoppedAt >= state.recordingSince) return null;
+  return inferred;
 }
 
 export async function describeStopped(sessions: StoppedSession[]): Promise<RestoreItem[]> {

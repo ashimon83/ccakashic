@@ -16,9 +16,11 @@ const CONFIG_DIR = path.join(os.homedir(), '.config', 'ccakashic');
 export const SNAPSHOT_FILE = path.join(CONFIG_DIR, 'live-sessions.json');
 const SESSION_REGISTRY_DIR = path.join(os.homedir(), '.claude', 'sessions');
 
-// Sessions killed by the same event share their last sighting, give or take a
-// run that was in progress while they went down.
-const GROUP_WINDOW_MS = 150_000;
+// Sessions killed by the same event share their last sighting, give or take the
+// run that was in progress while they went down. Measured between consecutive
+// sightings, not from the newest one: a session that was opened and closed after
+// the stop must not push the real group out of a fixed window.
+const GROUP_GAP_MS = 150_000;
 const RETENTION_MS = 14 * 24 * 60 * 60_000;
 
 export interface SnapshotEntry {
@@ -37,10 +39,10 @@ export interface SnapshotState {
   lastRunAt: number;
   // First run of the recorder. Stops before this are not in the records.
   recordingSince: number | null;
-  // Newest stop ever estimated from logs. Once its sessions are all resumed, the
-  // next-older group of closed sessions would otherwise surface as a "stop",
-  // and so on back through history; anything older than this is ignored.
-  lastEstimatedStopAt: number | null;
+  // Newest stop ever offered. Once its sessions are all reopened, the next-older
+  // group of closed sessions would otherwise surface as a "stop", and so on back
+  // through history; anything older than this is ignored.
+  lastOfferedStopAt: number | null;
   // lastSeenAlive of the stop the user dismissed from the dashboard
   dismissedStopAt: number | null;
   sessions: Record<string, SnapshotEntry>;
@@ -55,14 +57,19 @@ export interface LiveSession {
 }
 
 export function emptyState(): SnapshotState {
-  return { version: 1, lastRunAt: 0, recordingSince: null, lastEstimatedStopAt: null, dismissedStopAt: null, sessions: {} };
+  return { version: 1, lastRunAt: 0, recordingSince: null, lastOfferedStopAt: null, dismissedStopAt: null, sessions: {} };
 }
 
 export function loadSnapshot(file = SNAPSHOT_FILE): SnapshotState {
   try {
     const data = JSON.parse(fs.readFileSync(file, 'utf-8'));
     if (data && data.version === 1 && data.sessions && typeof data.sessions === 'object') {
-      return { ...emptyState(), ...data };
+      const state = { ...emptyState(), ...data };
+      // 0.6.0 called it lastEstimatedStopAt, when only the log estimate used it.
+      if (state.lastOfferedStopAt === null && typeof data.lastEstimatedStopAt === 'number') {
+        state.lastOfferedStopAt = data.lastEstimatedStopAt;
+      }
+      return state;
     }
   } catch {
     // not recorded yet
@@ -152,23 +159,46 @@ export interface LastStop {
 // brought back. A group only counts as a stop when nothing survived it: if some
 // session was alive both before and after, the others were closed one by one on
 // purpose (/exit, closing a tab), not killed by a reboot or a hung cmux.
-export function findLastStop(state: SnapshotState, liveIds: Set<string>): LastStop | null {
+export function findLastStop(
+  state: SnapshotState,
+  liveIds: Set<string>,
+  // Sessions without a conversation log can't be resumed; leaving them in would
+  // let a throwaway session started after the stop stand in for the group.
+  resumable: (sessionId: string) => boolean = () => true,
+  notOlderThan = 0,
+): LastStop | null {
   const dead: StoppedSession[] = [];
   for (const [sessionId, e] of Object.entries(state.sessions)) {
-    if (!liveIds.has(sessionId)) dead.push({ sessionId, ...e });
+    if (!liveIds.has(sessionId) && resumable(sessionId)) dead.push({ sessionId, ...e });
   }
   if (!dead.length) return null;
-  const stoppedAt = Math.max(...dead.map((d) => d.lastSeenAlive));
+  dead.sort((a, b) => b.lastSeenAlive - a.lastSeenAlive || a.cwd.localeCompare(b.cwd));
 
+  const group = pickStoppedGroup(dead, (d) => d.lastSeenAlive);
+  const stoppedAt = group[0].lastSeenAlive;
+  if (stoppedAt < notOlderThan) return null;
+
+  // Something running from before the stop means the rest were closed one by
+  // one on purpose, not taken down together.
   for (const id of liveIds) {
     const e = state.sessions[id];
     if (e && e.aliveSince <= stoppedAt) return null;
   }
+  return { stoppedAt, sessions: group };
+}
 
-  const sessions = dead
-    .filter((d) => d.lastSeenAlive >= stoppedAt - GROUP_WINDOW_MS)
-    .sort((a, b) => b.lastSeenAlive - a.lastSeenAlive || a.cwd.localeCompare(b.cwd));
-  return { stoppedAt, sessions };
+// The most recent group that went down together, newest first. Sessions come
+// and go all day — a scheduled run, a quick question — and any of them would
+// otherwise stand in for the last stop just by being the newest. So a group of
+// several wins over a lone session, even a more recent one.
+export function pickStoppedGroup<T>(deadNewestFirst: T[], at: (item: T) => number, gapMs = GROUP_GAP_MS): T[] {
+  const clusters: T[][] = [];
+  for (const item of deadNewestFirst) {
+    const current = clusters[clusters.length - 1];
+    if (current && at(current[current.length - 1]) - at(item) <= gapMs) current.push(item);
+    else clusters.push([item]);
+  }
+  return clusters.find((c) => c.length > 1) ?? clusters[0];
 }
 
 // One launchd tick. Kept free of any import beyond Node built-ins: the agent

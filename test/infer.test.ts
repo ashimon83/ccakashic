@@ -87,22 +87,25 @@ describe('readLogFacts', () => {
 });
 
 describe('chooseStop', () => {
-  const stopAt = (t: number) => ({ stoppedAt: t, sessions: [], estimated: true });
+  // Stands in for inferLastStop, which itself declines anything older than the floor.
+  const stopAt = (t: number) => (notOlderThan: number) =>
+    (t < notOlderThan ? null : { stoppedAt: t, sessions: [], estimated: true });
 
-  it('does not walk back to older groups once the estimated stop is resolved', () => {
-    const first = chooseStop(emptyState(), [], false, () => stopAt(100));
+  it('does not walk back to older groups once the offered stop is resolved', () => {
+    const first = chooseStop(emptyState(), [], false, stopAt(100));
     expect(first.stop?.stoppedAt).toBe(100);
-    // everything from 100 resumed; the logs now point at an older group
-    expect(chooseStop(first.state, [], false, () => stopAt(50)).stop).toBeNull();
+    expect(first.state.lastOfferedStopAt).toBe(100);
+    // everything from 100 reopened; the logs now point at an older group
+    expect(chooseStop(first.state, [], false, stopAt(50)).stop).toBeNull();
     // still offered while some of the same stop remain
-    expect(chooseStop(first.state, [], false, () => stopAt(100)).stop?.stoppedAt).toBe(100);
-    // a newer crash is offered again
-    expect(chooseStop(first.state, [], false, () => stopAt(200)).stop?.stoppedAt).toBe(200);
+    expect(chooseStop(first.state, [], false, stopAt(100)).stop?.stoppedAt).toBe(100);
+    // a newer stop is offered again
+    expect(chooseStop(first.state, [], false, stopAt(200)).stop?.stoppedAt).toBe(200);
   });
 
   it('with the agent, uses logs only for stops before recording began', () => {
     const state = { ...emptyState(), recordingSince: 1000 };
-    expect(chooseStop(state, [], true, () => stopAt(900)).stop?.stoppedAt).toBe(900);
-    expect(chooseStop(state, [], true, () => stopAt(1100)).stop).toBeNull();
+    expect(chooseStop(state, [], true, stopAt(900)).stop?.stoppedAt).toBe(900);
+    expect(chooseStop(state, [], true, stopAt(1100)).stop).toBeNull();
   });
 });
