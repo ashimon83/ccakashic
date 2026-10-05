@@ -122,6 +122,18 @@ describe('findLastStop', () => {
     expect(stop?.sessions.map((s) => s.sessionId).sort()).toEqual(['a', 'b', 'c']);
   });
 
+  it('still offers a group that stopped together when a session elsewhere survived', () => {
+    const t0 = 1_000_000_000;
+    const state = replay([
+      // 'desktop' runs in another terminal / the desktop app and is untouched
+      { at: t0, ids: ['a', 'b', 'c', 'desktop'] },
+      { at: t0 + MIN, ids: ['desktop'] },
+      { at: t0 + 2 * MIN, ids: ['desktop'] },
+    ]);
+    const stop = findLastStop(state, new Set(['desktop']));
+    expect(stop?.sessions.map((s) => s.sessionId).sort()).toEqual(['a', 'b', 'c']);
+  });
+
   it('returns null when everything recorded is still running', () => {
     const state = replay([{ at: 1_000_000_000, ids: ['a'] }]);
     expect(findLastStop(state, new Set(['a']))).toBeNull();

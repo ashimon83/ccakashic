@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { CLAUDE_DIR } from './discover';
-import { pickStoppedGroup, type LastStop, type LiveSession, type StoppedSession } from './snapshot';
+import { pickStoppedGroup, survivedBy, type LastStop, type LiveSession, type StoppedSession } from './snapshot';
 
 // Best-effort "what was running before the crash" from the conversation logs
 // alone, for when the snapshot agent is not installed.
@@ -133,9 +133,10 @@ export function inferLastStop(
   const stoppedAt = Math.floor(group[0].mtime); // an integer survives the round trip through the page
   if (stoppedAt < notOlderThan) return null;
 
-  // A session started before the stop and still running means the others were
-  // closed on purpose, not taken down together.
-  if (live.some((s) => s.startedAt !== undefined && s.startedAt <= stoppedAt)) return null;
+  // Same rule as the recorded path: only a lone stop is explained away by
+  // something older still running.
+  const liveSince = live.map((s) => s.startedAt).filter((v): v is number => v !== undefined);
+  if (survivedBy(group.length, liveSince, stoppedAt)) return null;
 
   const sessions: StoppedSession[] = group
     // In a shutdown burst, only sessions that actually exited belong to it.
