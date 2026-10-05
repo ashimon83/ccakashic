@@ -177,14 +177,18 @@ export function findLastStop(
   const group = pickStoppedGroup(dead, (d) => d.lastSeenAlive);
   const stoppedAt = group[0].lastSeenAlive;
   if (stoppedAt < notOlderThan) return null;
-
-  // Something running from before the stop means the rest were closed one by
-  // one on purpose, not taken down together.
-  for (const id of liveIds) {
-    const e = state.sessions[id];
-    if (e && e.aliveSince <= stoppedAt) return null;
-  }
+  const liveSince = [...liveIds].map((id) => state.sessions[id]?.aliveSince).filter((v): v is number => v !== undefined);
+  if (survivedBy(group.length, liveSince, stoppedAt)) return null;
   return { stoppedAt, sessions: group };
+}
+
+// A lone session that stopped while something older kept running was closed on
+// purpose, so it is not offered. Several at once is a different story: they went
+// down together even if a session elsewhere (another terminal, the desktop app,
+// a scheduled run) was untouched by whatever took them.
+export function survivedBy(groupSize: number, liveSince: number[], stoppedAt: number): boolean {
+  if (groupSize > 1) return false;
+  return liveSince.some((since) => since <= stoppedAt);
 }
 
 // The most recent group that went down together, newest first. Sessions come
