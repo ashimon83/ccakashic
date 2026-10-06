@@ -3,7 +3,6 @@ import * as http from 'http';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import * as readline from 'readline';
 import { exec } from 'child_process';
 import { getOrCreateToken } from '../util';
 import { listProjects, listSessions, listRecentSessions, findRecentSessionsByIds, findSessionForCwd, readCwdFromSession } from '../discover';
@@ -15,6 +14,7 @@ import { generateDashboard, renderPaneBody, paneStatus, timeAgo, PANE_COUNTS, DE
 import type { WaitReason } from '../cmux';
 import { loadSnapshot, saveSnapshot, snapshotNow } from '../snapshot';
 import { describeStopped, restoreAll, detectLastStop } from '../restore';
+import { pickItems } from '../picker';
 import { installAgent, uninstallAgent, refreshInstalledAgent } from '../agent';
 import type { ResumeContext } from '../resume-ui';
 import {
@@ -525,16 +525,6 @@ function formatClock(ms: number): string {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function askYesNo(question: string): Promise<boolean> {
-  const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
-  return new Promise((resolve) => {
-    rl.question(question, (answer: string) => {
-      rl.close();
-      resolve(/^(y|yes|)$/i.test(answer.trim()));
-    });
-  });
-}
-
 async function runRestoreCommand(): Promise<void> {
   const dryRun = process.argv.includes('--dry-run');
   const yes = process.argv.includes('--yes') || process.argv.includes('-y');
@@ -557,19 +547,48 @@ async function runRestoreCommand(): Promise<void> {
     return;
   }
   const items = await describeStopped(stop.sessions);
-  console.log(`${items.length} session(s) you had open until ${formatClock(stop.stoppedAt)}${stop.estimated ? ' (estimated)' : ''}:\n`);
-  for (const it of items) console.log(`  • ${it.title}\n    ${it.cwd}`);
-  console.log('');
-  if (dryRun) return;
+  const heading = `${items.length} session(s) you had open until ${formatClock(stop.stoppedAt)}${stop.estimated ? ' (estimated)' : ''}:`;
+  const printList = () => {
+    console.log(`${heading}\n`);
+    for (const it of items) console.log(`  • ${it.title}\n    ${it.cwd}`);
+    console.log('');
+  };
+
+  if (dryRun) return printList();
 
   if (NO_CMUX || !(await isCmuxAvailable())) {
+    printList();
     console.log('cmux is not reachable (run this from a terminal inside cmux). Commands to resume by hand:\n');
     for (const it of items) console.log(buildResumeCommand(it.cwd, it.sessionId));
     return;
   }
-  if (!yes && !(await askYesNo(`Reopen all ${items.length} in new cmux workspaces? [Y/n] `))) return;
 
-  const outcomes = await restoreAll(items, (o) => {
+  // Interactive: a checkbox list, everything ticked, so reopening all is just
+  // Enter. --yes (or a pipe, where there are no keys to read) takes them all.
+  let chosen = items;
+  if (!yes) {
+    if (!process.stdin.isTTY) {
+      printList();
+      console.log('Re-run with --yes to reopen them (no terminal to choose in).');
+      return;
+    }
+    console.log(heading);
+    const picked = await pickItems(items.map((it) => ({ label: it.title, hint: it.cwd })));
+    if (picked === null) {
+      console.log('Cancelled.');
+      return;
+    }
+    chosen = picked.map((i) => items[i]);
+    if (!chosen.length) {
+      console.log('Nothing selected.');
+      return;
+    }
+    console.log('');
+  } else {
+    printList();
+  }
+
+  const outcomes = await restoreAll(chosen, (o) => {
     console.log(o.ok ? `  ✓ ${o.title}` : `  ✗ ${o.title} — ${o.message}`);
   });
   const failed = outcomes.filter((o) => !o.ok).length;
