@@ -81,12 +81,15 @@ After a reboot (memory pressure, an update) or a hung cmux you had to kill, ever
 
 ```bash
 # From a terminal inside cmux
-npx ccakashic restore            # lists the sessions you had open, then reopens them
+npx ccakashic restore            # pick from the sessions you had open, then reopen them
+npx ccakashic restore --yes      # reopen all of them, no prompt
 npx ccakashic restore --dry-run  # just list them
 
 # Optional: record open sessions every minute (launchd, macOS) for an exact list
 npx ccakashic install-agent
 ```
+
+`restore` opens a checkbox list with every session ticked: `space` toggles one, `a` toggles all, `enter` reopens what is ticked, `q` cancels. So reopening the lot is just `enter`, and reopening one is `a` then `space`. Piped or non-interactive, it needs `--yes`.
 
 **No setup needed.** Without the agent, the list is estimated from the conversation logs: the most recent group of sessions that stopped together. When they were closed normally — including by a shutdown or reboot — each wrote an exit record at the same moment, so the group is precise. When cmux was force-quit nothing gets written, so it falls back to "active within 15 minutes of the last one", which misses sessions that sat idle. Install the agent if that case matters to you.
 
