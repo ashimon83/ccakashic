@@ -158,7 +158,11 @@ export async function resumeInNewWorkspace(
 ): Promise<ResumeResult> {
   const prev = background ? await currentWorkspaceId() : null;
   const out = await run(['new-workspace', '--command', buildResumeCommand(cwd, sessionId)]);
-  const workspaceId = parseOkId(out);
+  // Newer cmux (0.65+) answers with a short ref ("workspace:1000010028")
+  // instead of the UUID. Everything else here (resume map, liveness checks,
+  // notifications) keys on the upper-cased UUID, so translate the ref. If the
+  // lookup fails, fall back to the ref itself so rename/select still work.
+  const workspaceId = await resolveWorkspaceUuid(parseOkId(out));
   if (title) {
     try {
       await run(['rename-workspace', '--workspace', workspaceId, title]);
@@ -177,9 +181,34 @@ export async function resumeInNewWorkspace(
 }
 
 export function parseOkId(output: string): string {
-  const match = output.match(/^OK\s+(\S+)/);
+  const match = output.match(/^OK\s+(\S+)/m);
   if (!match) throw new Error(`Unexpected cmux output: ${output}`);
-  return match[1].toUpperCase();
+  // Refs like "workspace:1000010028" are case-sensitive in cmux; only UUIDs
+  // get normalized to upper case.
+  return isWorkspaceRef(match[1]) ? match[1] : match[1].toUpperCase();
+}
+
+export function isWorkspaceRef(id: string): boolean {
+  return /^[a-z]+:\d+$/.test(id);
+}
+
+// Map of workspace ref → upper-cased UUID, from `list-workspaces --json`.
+export function parseWorkspaceRefs(data: any): Map<string, string> {
+  const result = new Map<string, string>();
+  for (const ws of data?.workspaces || []) {
+    if (ws?.ref && ws?.id) result.set(String(ws.ref), String(ws.id).toUpperCase());
+  }
+  return result;
+}
+
+export async function resolveWorkspaceUuid(id: string): Promise<string> {
+  if (!isWorkspaceRef(id)) return id;
+  try {
+    const out = await run(['--json', '--id-format', 'both', 'list-workspaces']);
+    return parseWorkspaceRefs(JSON.parse(out)).get(id) || id;
+  } catch {
+    return id;
+  }
 }
 
 export async function openInCmuxBrowser(url: string): Promise<void> {
