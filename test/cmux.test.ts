@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { shellQuote, buildResumeCommand, parseOkId, parseWaitingNotifications, parseWorkspaceEnv } from '../src/cmux';
+import { shellQuote, buildResumeCommand, parseOkId, parseWorkspaceRefs, parseWaitingNotifications, parseWorkspaceEnv } from '../src/cmux';
 
 describe('shellQuote', () => {
   it('wraps plain strings in single quotes', () => {
@@ -34,8 +34,33 @@ describe('parseOkId', () => {
     expect(parseOkId('OK abc-def')).toBe('ABC-DEF');
   });
 
+  it('keeps cmux 0.65+ workspace refs as-is (refs are case-sensitive)', () => {
+    expect(parseOkId('OK workspace:1000010028')).toBe('workspace:1000010028');
+  });
+
+  it('finds the OK line after a deprecation notice', () => {
+    expect(parseOkId("cmux: 'new-workspace' is now an alias\nOK workspace:7")).toBe('workspace:7');
+  });
+
   it('throws on unexpected output', () => {
     expect(() => parseOkId('ERROR something')).toThrow(/Unexpected cmux output/);
+  });
+});
+
+describe('parseWorkspaceRefs', () => {
+  it('maps refs to upper-cased UUIDs', () => {
+    const refs = parseWorkspaceRefs({
+      workspaces: [
+        { ref: 'workspace:1000010028', id: 'c7f3e966-5d1b-45fb-a243-8392fa556dc1' },
+        { ref: 'workspace:2' },
+      ],
+    });
+    expect(refs.get('workspace:1000010028')).toBe('C7F3E966-5D1B-45FB-A243-8392FA556DC1');
+    expect(refs.has('workspace:2')).toBe(false);
+  });
+
+  it('tolerates junk', () => {
+    expect(parseWorkspaceRefs(null).size).toBe(0);
   });
 });
 
